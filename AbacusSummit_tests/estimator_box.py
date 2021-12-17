@@ -1,13 +1,8 @@
 import numba
 import numpy as np
 
-def A_NFW(c):
-    return np.log(1+c)-c/(1+c)
 
-def f(c):
-    return c/((c+1)*A_NFW(c))
-
-
+#@numba.njit(parallel=False,fastmath=True)
 @numba.njit(parallel=True,fastmath=True)
 def pairwise_velocity(X, V_los, Lbox, bins, dtype=np.float32, nthread=1):
     """
@@ -35,14 +30,19 @@ def pairwise_velocity(X, V_los, Lbox, bins, dtype=np.float32, nthread=1):
 
     # only works for linear
     dbin = bins[1]-bins[0]
-
-    pair_count = np.zeros(len(bins)-1, dtype=dtype)
-    weight_count = np.zeros(len(bins)-1, dtype=dtype)
-    norm_weight_count = np.zeros(len(bins)-1, dtype=dtype)
+    fbin = bins[0]
+    
+    pair_count = np.zeros((nthread, len(bins)-1), dtype=dtype)
+    weight_count = np.zeros((nthread, len(bins)-1), dtype=dtype)
+    norm_weight_count = np.zeros((nthread, len(bins)-1), dtype=dtype)
+    #pairwise_velocity = np.zeros((nthread, len(bins)-1), dtype=dtype)
+    pairwise_velocity = np.zeros(len(bins)-1, dtype=dtype)
     
     for i in numba.prange(N):
         x1, y1, z1 = X[i][0], X[i][1], X[i][2]
         s1 = V_los[i]
+
+        t = numba.np.ufunc.parallel._get_thread_id()
         
         for j in range(N):
             x2, y2, z2 = X[j][0], X[j][1], X[j][2]
@@ -68,18 +68,28 @@ def pairwise_velocity(X, V_los, Lbox, bins, dtype=np.float32, nthread=1):
             dist2 = dx**2 + dy**2 + dz**2
             dist = np.sqrt(dist2)
 
-            hat_dz = dz/dist
+            if dist != 0:
+                hat_dz = dz/dist
+            else:
+                hat_dz = 0.
             p12 = 2.*hat_dz
             
             weight = 2. * (s1-s2) * p12 
             norm_weight = p12**2.
             
-            ind = np.int64(np.floor(dist/dbin))
-            if ind < len(bins)-1:
-                pair_count[ind] += 1.
-                weight_count[ind] += weight 
-                norm_weight_count[ind] += norm_weight
+            ind = np.int64(np.floor((dist-fbin)/dbin))
+            if (ind < len(bins)-1) and (ind >= 0):
+                pair_count[t, ind] += 1.
+                weight_count[t, ind] += weight 
+                norm_weight_count[t, ind] += norm_weight
 
-    pairwise_velocity = weight_count/norm_weight_count
-
+    pair_count = pair_count.sum(axis=0)
+    weight_count = weight_count.sum(axis=0)
+    norm_weight_count = norm_weight_count.sum(axis=0)
+    
+    for i in range(len(bins)-1):
+        if norm_weight_count[i] != 0.:
+            pairwise_velocity[i] = weight_count[i]/norm_weight_count[i]
+    
+            
     return pair_count, pairwise_velocity
