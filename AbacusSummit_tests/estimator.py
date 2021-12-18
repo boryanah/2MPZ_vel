@@ -58,9 +58,9 @@ def pairwise_velocity_sky(X, V_los, Lbox, bins, is_log_bin, dtype=np.float32, nt
                 
             s2 = V_los[j]
             
-            dx = x2-x1
-            dy = y2-y1
-            dz = z2-z1
+            dx = x1-x2
+            dy = y1-y2
+            dz = z1-z2
 
             """
             if dx > Lbox/two:
@@ -157,9 +157,9 @@ def pairwise_velocity_box(X, V_los, Lbox, bins, is_log_bin, dtype=np.float32, nt
             x2, y2, z2 = X[j][0], X[j][1], X[j][2]
             s2 = V_los[j]
             
-            dx = x2-x1
-            dy = y2-y1
-            dz = z2-z1
+            dx = x1-x2
+            dy = y1-y2
+            dz = z1-z2
 
             if dx > Lbox/two:
                 dx -= Lbox
