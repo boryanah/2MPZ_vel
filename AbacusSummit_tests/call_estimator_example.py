@@ -3,7 +3,8 @@ import time
 import Corrfunc # only using for comparison
 import numpy as np
 
-from estimator_box import pairwise_velocity
+#from estimator import pairwise_velocity_box as pairwise_velocity; periodic = True # assumes LOS along z direction
+from estimator import pairwise_velocity_sky as pairwise_velocity; periodic = False
 
 # defining bins
 #bins = np.linspace(2.5, 24.3, 19); is_log_bin = False
@@ -43,12 +44,12 @@ for i in range(len(Ns)):
     #print(DD, PV)
 
     t1 = time.time()
-    res = Corrfunc.theory.DD(1, nthread, bins, *P.T, periodic=True, boxsize=boxsize)
+    res = Corrfunc.theory.DD(1, nthread, bins, *P.T, periodic=periodic, boxsize=boxsize)
     time_corrfunc = time.time()-t1
     #print(res['npairs'])
 
     assert np.sum(res['npairs'] - DD) == 0.
-    #print(res['npairs'] - DD)
+    
 
     print("Corrfunc time = ", time_corrfunc)
     print(f"Corrfunc is {time_numba/time_corrfunc:.3f} times faster")
@@ -63,6 +64,6 @@ pos = np.array([[0., 0., 0.],
 vel = np.array([[0., 0., 0.],
         [1., 0., 0.]])
 
-res = Corrfunc.theory.DD(1, 4, bins, *pos.T, weights1=vel.T, periodic=True, boxsize=100., verbose=True, weight_type='pairwise_vel', isa='fallback')
+res = Corrfunc.theory.DD(1, 4, bins, *pos.T, weights1=vel.T, periodic=periodic, boxsize=100., verbose=True, weight_type='pairwise_vel', isa='fallback')
 
 print(res['npairs'])
