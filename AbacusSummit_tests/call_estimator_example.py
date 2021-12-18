@@ -5,23 +5,28 @@ import numpy as np
 
 from estimator_box import pairwise_velocity
 
-bins = np.linspace(2.5, 24.3, 19)
+# defining bins
+#bins = np.linspace(2.5, 24.3, 19); is_log_bin = False
+bins = np.geomspace(2.5, 24.3, 19); is_log_bin = True
 
 #nthread = 1
 nthread = 8
 
-dtype = np.float32
-#dtype = np.float64
+#dtype = np.float32 # THE ASSERTION MIGHT BREAK CAUSE OF NUMERICAL STUFF
+dtype = np.float64 # THE ASSERTION SHOULD HOLD
 boxsize = 1000.
 print("nthread = ", nthread)
 print("dtype = ", dtype)
 print("boxsize = ", boxsize)
 
+
 Ns = [1000, 10000, 100000]
 for i in range(len(Ns)):
     N = Ns[i]
     print("number of tracers = ", N)
-
+    n = N/boxsize**3.
+    print(f"number density = {n:.5f}")
+    
     X = np.random.uniform(0., boxsize, N)
     Y = np.random.uniform(0., boxsize, N)
     Z = np.random.uniform(0., boxsize, N)
@@ -31,9 +36,9 @@ for i in range(len(Ns)):
     P = P.astype(dtype)
     V_los = V_los.astype(dtype)
 
-    DD, PV = pairwise_velocity(P, V_los, boxsize, bins, dtype=dtype, nthread=nthread)
+    DD, PV = pairwise_velocity(P, V_los, boxsize, bins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
     t1 = time.time()
-    DD, PV = pairwise_velocity(P, V_los, boxsize, bins, dtype=dtype, nthread=nthread)
+    DD, PV = pairwise_velocity(P, V_los, boxsize, bins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
     time_numba = time.time()-t1
     #print(DD, PV)
 
@@ -45,6 +50,7 @@ for i in range(len(Ns)):
     assert np.sum(res['npairs'] - DD) == 0.
     #print(res['npairs'] - DD)
 
+    print("Corrfunc time = ", time_corrfunc)
     print(f"Corrfunc is {time_numba/time_corrfunc:.3f} times faster")
     print("------------------------------------------------")
 

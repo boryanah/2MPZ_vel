@@ -4,7 +4,7 @@ import numpy as np
 
 #@numba.njit(parallel=False,fastmath=True)
 @numba.njit(parallel=True,fastmath=True)
-def pairwise_velocity(X, V_los, Lbox, bins, dtype=np.float32, nthread=1):
+def pairwise_velocity(X, V_los, Lbox, bins, is_log_bin=True, dtype=np.float32, nthread=1):
     """
     The formula is:
     v_1,2 = 2 Sum_A,B (s_A-s_B) p_AB / (Sum_A,B p_AB^2)
@@ -21,16 +21,20 @@ def pairwise_velocity(X, V_los, Lbox, bins, dtype=np.float32, nthread=1):
     # TODO: check that the pairwise velocity thingy works
     # implement for logarithmic bins
     # implement for curved sky (i.e. LOS not z!)
-    # fix nans which happen when we include self-counting and no pairs (can e.g. loop at the end)
     
     numba.set_num_threads(nthread)
 
     N = len(X)
     Lbox = dtype(Lbox)
+    one = dtype(1.)
+    two = dtype(2.)
 
     # only works for linear
-    dbin = bins[1]-bins[0]
-    fbin = bins[0]
+    if is_log_bin:
+        dbin = dtype(bins[1]/bins[0])
+    else:
+        dbin = dtype(bins[1]-bins[0])
+    fbin = dtype(bins[0])
     
     pair_count = np.zeros((nthread, len(bins)-1), dtype=dtype)
     weight_count = np.zeros((nthread, len(bins)-1), dtype=dtype)
@@ -52,36 +56,37 @@ def pairwise_velocity(X, V_los, Lbox, bins, dtype=np.float32, nthread=1):
             dy = y2-y1
             dz = z2-z1
 
-            if dx > Lbox/2.:
+            if dx > Lbox/two:
                 dx -= Lbox
-            if dy > Lbox/2.:
+            if dy > Lbox/two:
                 dy -= Lbox
-            if dz > Lbox/2.:
+            if dz > Lbox/two:
                 dz -= Lbox
-            if dx <= -Lbox/2.:
+            if dx <= -Lbox/two:
                 dx += Lbox
-            if dy <= -Lbox/2.:
+            if dy <= -Lbox/two:
                 dy += Lbox
-            if dz <= -Lbox/2.:
+            if dz <= -Lbox/two:
                 dz += Lbox
 
             dist2 = dx**2 + dy**2 + dz**2
             dist = np.sqrt(dist2)
 
-            if dist != 0:
-                hat_dz = dz/dist
+            if is_log_bin:
+                ind = np.int64(np.floor(np.log(dist/fbin)/np.log(dbin)))
             else:
-                hat_dz = 0.
-            p12 = 2.*hat_dz
-            
-            weight = 2. * (s1-s2) * p12 
-            norm_weight = p12**2.
-            
-            ind = np.int64(np.floor((dist-fbin)/dbin))
+                ind = np.int64(np.floor((dist-fbin)/dbin))
+                
             if (ind < len(bins)-1) and (ind >= 0):
-                pair_count[t, ind] += 1.
-                weight_count[t, ind] += weight 
-                norm_weight_count[t, ind] += norm_weight
+                if dist != 0:
+                    hat_dz = dz/dist
+                else:
+                    hat_dz = dtype(0.)
+
+                p12 = two * hat_dz
+                pair_count[t, ind] += one
+                weight_count[t, ind] += two * (s1-s2) * p12
+                norm_weight_count[t, ind] += p12**two
 
     pair_count = pair_count.sum(axis=0)
     weight_count = weight_count.sum(axis=0)
