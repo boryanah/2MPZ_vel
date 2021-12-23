@@ -21,9 +21,14 @@ galaxy_sample = "2mpz"
 if galaxy_sample == "2mpz":
     # load mock data
     hdul = fits.open("../2MPZ_tests/2mpz_data/2MPZ.fits")
-    CX = hdul[1].data['CX'].flatten()
-    CY = hdul[1].data['CY'].flatten()
-    CZ = hdul[1].data['CZ'].flatten()
+    B = hdul[1].data['B'].flatten()
+    L = hdul[1].data['L'].flatten()
+    CX = np.cos(B)*np.cos(L)
+    CY = np.cos(B)*np.sin(L)
+    CZ = np.sin(B)
+    #CX = hdul[1].data['CX'].flatten()
+    #CY = hdul[1].data['CY'].flatten()
+    #CZ = hdul[1].data['CZ'].flatten()
     K_rel = hdul[1].data['KCORR'].flatten()
     Z_photo = hdul[1].data['ZPHOTO'].flatten()
 
