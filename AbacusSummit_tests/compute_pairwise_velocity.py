@@ -21,14 +21,19 @@ galaxy_sample = "2mpz"
 if galaxy_sample == "2mpz":
     # load mock data
     hdul = fits.open("../2MPZ_tests/2mpz_data/2MPZ.fits")
-    B = hdul[1].data['B'].flatten() # phi
-    L = hdul[1].data['L'].flatten()
-    L = 90.-L # theta
+    B = hdul[1].data['B'].flatten() # -90, 90
+    L = hdul[1].data['L'].flatten() # 0, 360
+    theta = (90.-B)*np.pi/180.
+    phi = L.copy()*np.pi/180.
+    print("Lmin/Lmax = ", L.min(), L.max())
+    print("Bmin/Bmax = ", B.min(), B.max())
+
     B *= np.pi/180.
     L *= np.pi/180.
     CX = np.cos(B)*np.cos(L)
     CY = np.cos(B)*np.sin(L)
     CZ = np.sin(B)
+    
     K_rel = hdul[1].data['KCORR'].flatten()
     Z_photo = hdul[1].data['ZPHOTO'].flatten()
 
@@ -68,20 +73,24 @@ if galaxy_sample == "2mpz":
         temp = hdul[1].data['I_STOKES']
         nest = True
         nside = 2048
+        npix = hp.nside2npix(nside)
+        ring2nest = hp.ring2nest(nside, np.arange(npix)) # tells me for each pixel in RING, where do I find the pixel in NESTED
+        temp = temp[ring2nest]; nest = False # convert to RING
         
-        # apply high-pass filter
+        # define high-pass filter
         ls = np.arange(3*nside)
         hp_filter = np.zeros_like(ls)
         ell_filter = 3000
         hp_filter[ls > ell_filter] = 1
-        alms_temp = hp.sphtfunc.map2alm(temp, pol=False)
+
+        # apply high-pass filter
+        alms_temp = hp.sphtfunc.map2alm(temp, pol=False) # expects input in RING
         alms_temp_high = hp.sphtfunc.almxfl(alms_temp, hp_filter)
-        temp_high = hp.sphtfunc.alm2map(alms_temp_high, nside)
-    
-        # for each galaxy in 2MPZ, find pixel
-        #ipix = hp.pixelfunc.vec2pix(nside, CX, CY, CZ, nest)
-        ipix = hp.ang2pix(nside, L, B)
+        temp_high = hp.sphtfunc.alm2map(alms_temp_high, nside) # returns only in RING
         
+        # for each galaxy in 2MPZ, find pixel
+        ipix = hp.pixelfunc.vec2pix(nside, CX, CY, CZ, nest=nest)
+        #ipix2 = hp.ang2pix(nside, theta, phi, nest=nest) # have checked that this agrees with ipix when using B, L
         # take value of pixel from CMB high-pass map and name V_los
         V_los = temp_high[ipix]
         np.save(fn_V_los, V_los)
