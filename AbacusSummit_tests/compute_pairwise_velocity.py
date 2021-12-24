@@ -21,14 +21,14 @@ galaxy_sample = "2mpz"
 if galaxy_sample == "2mpz":
     # load mock data
     hdul = fits.open("../2MPZ_tests/2mpz_data/2MPZ.fits")
-    B = hdul[1].data['B'].flatten()
+    B = hdul[1].data['B'].flatten() # phi
     L = hdul[1].data['L'].flatten()
+    L = 90.-L # theta
+    B *= np.pi/180.
+    L *= np.pi/180.
     CX = np.cos(B)*np.cos(L)
     CY = np.cos(B)*np.sin(L)
     CZ = np.sin(B)
-    #CX = hdul[1].data['CX'].flatten()
-    #CY = hdul[1].data['CY'].flatten()
-    #CZ = hdul[1].data['CZ'].flatten()
     K_rel = hdul[1].data['KCORR'].flatten()
     Z_photo = hdul[1].data['ZPHOTO'].flatten()
 
@@ -54,7 +54,7 @@ if galaxy_sample == "2mpz":
         for i in range(len(CX)):
             if i%10000 == 0: print(i)
             if Z_photo[i] < 0.: continue
-            CD[i] = Cosmo.luminosity_distance(Z_photo[i])
+            CD[i] = Cosmo.luminosity_distance(Z_photo[i])/(1.+Z_photo[i])
         np.save(fn_CD, CD)
     P = P*CD[:, None]
 
@@ -79,8 +79,9 @@ if galaxy_sample == "2mpz":
         temp_high = hp.sphtfunc.alm2map(alms_temp_high, nside)
     
         # for each galaxy in 2MPZ, find pixel
-        ipix = hp.pixelfunc.vec2pix(nside, CX, CY, CZ, nest)
-    
+        #ipix = hp.pixelfunc.vec2pix(nside, CX, CY, CZ, nest)
+        ipix = hp.ang2pix(nside, L, B)
+        
         # take value of pixel from CMB high-pass map and name V_los
         V_los = temp_high[ipix]
         np.save(fn_V_los, V_los)
