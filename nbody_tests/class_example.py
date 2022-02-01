@@ -21,3 +21,17 @@ def func(z, d_target):
 z0 = 0.45
 z_solve = fsolve(func, args=(d), x0=z0)
 print(z_solve)
+
+"""
+from scipy.optimize import fsolve
+def guess_comoving_distance(z):
+    d = Cosmo.luminosity_distance(z)
+
+    def func(z, d_target):
+        return Cosmo.luminosity_distance(z) - d_target    
+    
+    z0 = 0.1
+    z_solve = fsolve(func, args=(d), x0=z0)
+    print(z_solve)
+    return
+"""

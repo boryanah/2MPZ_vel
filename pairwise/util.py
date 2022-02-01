@@ -36,14 +36,15 @@ def cutoutGeometry(projCutout='cea', rApMaxArcmin=6., resCutoutArcmin=0.25, test
 
     return cutoutMap
 
-def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pathTestFig='figs/', test=False):
+def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pathTestFig='figs/', test=False, cmbMask=None):
     """Extracts a small CEA or CAR map around the given position, with the given angular size and resolution.
     ra, dec in degrees.
     Does it for the map, the mask and the hit count.
     """
     # enmap 
     stampMap = cutoutGeometry(rApMaxArcmin=rApMaxArcmin, resCutoutArcmin=resCutoutArcmin, projCutout=projCutout)
-
+    stampMask = stampMap.copy()
+    
     # coordinates of the square map (between -1 and 1 deg); output map position [{dec,ra},ny,nx]
     opos = stampMap.posmap()
 
@@ -55,7 +56,12 @@ def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pat
 
     # Here, I use bilinear interpolation
     stampMap[:, :] = cmbMap.at(ipos, prefilter=True, mask_nan=False, order=1)
-
+    if cmbMask is not None:
+        stampMask[:, :] = cmbMask.at(ipos, prefilter=True, mask_nan=False, order=1)
+    
+        # re-threshold the mask map, to keep 0 and 1 only
+        stampMask[:, :] = 1.*(stampMask[:,:]>0.5)
+    
     if test:
         print("Extracted cutouts around ra=", ra, "dec=", dec)
         print("- min, mean, max =", np.min(stampMap), np.mean(stampMap), np.max(stampMap))
@@ -65,13 +71,26 @@ def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pat
         plots = enplot.plot(enmap.upgrade(stampMap, 5), grid=True)
         enplot.write(pathTestFig+"/stampmap_ra"+str(np.round(ra, 2))+"_dec"+str(np.round(dec, 2)), plots)
 
+    if cmbMask is not None:
+        return opos, stampMap, stampMask
     return opos, stampMap
 
-def calc_T_AP(imap, rad_arcmin, test=False):
+def calc_T_AP(imap, rad_arcmin, test=False, mask=None):
     modrmap = imap.modrmap()
     radius = rad_arcmin*utils.arcmin
-    flux_in = imap[modrmap < radius].mean()
-    flux_out = imap[(modrmap >= radius) & (modrmap < np.sqrt(2.)*radius)].mean()
-    flux_diff = flux_in-flux_out
-    
+    inner = modrmap < radius
+    outer = (modrmap >= radius) & (modrmap < np.sqrt(2.)*radius)
+    if mask is None:
+        flux_inner = imap[inner].mean()
+        flux_outer = imap[outer].mean()
+    else:
+        if np.sum(mask[inner]) == 0.:
+            flux_inner = 0.
+        else:
+            flux_inner = np.sum(imap[inner]*mask[inner])/np.sum(mask[inner])
+        if np.sum(mask[outer]) == 0.:
+            flux_outer = 0.
+        else:
+            flux_outer = np.sum(imap[outer]*mask[outer])/np.sum(mask[outer])
+    flux_diff = flux_inner-flux_outer
     return flux_diff

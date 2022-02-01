@@ -87,6 +87,21 @@ if galaxy_sample == "2mpz":
         alms_temp = hp.sphtfunc.map2alm(temp, pol=False) # expects input in RING
         alms_temp_high = hp.sphtfunc.almxfl(alms_temp, hp_filter)
         temp_high = hp.sphtfunc.alm2map(alms_temp_high, nside) # returns only in RING
+
+        """
+        # ACT MAP
+        fn = "cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits"
+        lmax = 6000
+        mp = enmap.read_fits(fn)
+        shape = mp.shape
+        npix = enmap.npix(shape)
+        nside = curvedsky.npix2nside(npix) # ~2000
+        # aperture photometry 100,000 galaxies
+        # pixell cut out circles cluster studies 
+        mp = reproject.healpix_from_enmap(mp, lmax=lmax, nside=nside)
+        """
+        #hp.mollview(temp_high, min=-5.e-5, max=5.e-5)
+        #plt.show()
         
         # for each galaxy in 2MPZ, find pixel
         ipix = hp.pixelfunc.vec2pix(nside, CX, CY, CZ, nest=nest)

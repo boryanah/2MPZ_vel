@@ -2,3 +2,6 @@
 *txt
 *pyc
 __pycache__
+*data*
+*figs*
+*test*
