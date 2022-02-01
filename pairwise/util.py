@@ -84,13 +84,10 @@ def calc_T_AP(imap, rad_arcmin, test=False, mask=None):
         flux_inner = imap[inner].mean()
         flux_outer = imap[outer].mean()
     else:
-        if np.sum(mask[inner]) == 0.:
-            flux_inner = 0.
+        if (np.sum(mask[inner]) == 0.) or (np.sum(mask[outer]) == 0.):
+            return 0.
         else:
             flux_inner = np.sum(imap[inner]*mask[inner])/np.sum(mask[inner])
-        if np.sum(mask[outer]) == 0.:
-            flux_outer = 0.
-        else:
             flux_outer = np.sum(imap[outer]*mask[outer])/np.sum(mask[outer])
     flux_diff = flux_inner-flux_outer
     return flux_diff

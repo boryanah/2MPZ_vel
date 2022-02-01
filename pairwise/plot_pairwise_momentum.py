@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import plotparams
 plotparams.buba()
 
-galaxy_samples = ["2MPZ_ACT_BN", "2MPZ_ACT_D56", "BOSS_North_ACT_BN", "BOSS_South_ACT_D56"]
+#galaxy_samples = ["2MPZ_ACT_BN", "2MPZ_ACT_D56", "BOSS_North_ACT_BN", "BOSS_South_ACT_D56"]
+galaxy_samples = ["SDSS_L61_ACT_BN", "SDSS_L61_ACT_D56", "BOSS_North_ACT_BN", "BOSS_South_ACT_D56"]
 
 #h = 1.
 h = 0.7

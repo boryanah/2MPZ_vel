@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from pixell import enmap, enplot, utils
 from classy import Class
 from astropy.io import fits
+from astropy.io import ascii
 
 from util import *
 from estimator import pairwise_momentum
@@ -19,37 +20,59 @@ from estimator import pairwise_momentum
 #resCutoutArcmin = 0.5 # stamp resolution
 resCutoutArcmin = 0.25 # stamp resolution
 projCutout = 'cea' # projection
-want_jackknife = True
+want_jackknife = False
 h = 0.7; Omega_Lambda = 0.7; Omega_cdm = 0.25; Omega_b = 0.05
 
-# galaxy sample
+# galaxy and cmb sample
+cmb_sample = "ACT_BN"
+#cmb_sample = "ACT_D56"
 #galaxy_sample = "BOSS_South" # goes with D56
 #galaxy_sample = "BOSS_North" # goes with BN # slow
-galaxy_sample = "2MPZ" # both ACT maps
-if galaxy_sample == "2MPZ":
-    gal_fn = "../2MPZ_tests/2mpz_data/2MPZ.fits"
-elif galaxy_sample == "BOSS_North":
-    gal_fn = "../2MPZ_tests/boss_data/galaxy_DR12v5_CMASS_North.fits"
-elif galaxy_sample == "BOSS_South":
-    gal_fn = "../2MPZ_tests/boss_data/galaxy_DR12v5_CMASS_South.fits"
+#galaxy_sample = "2MPZ" # both ACT maps
+#galaxy_sample = "SDSS_L43D"
+#galaxy_sample = "SDSS_L61D"
+#galaxy_sample = "SDSS_L43"
+galaxy_sample = "SDSS_L61"
+#galaxy_sample = "SDSS_L79"
+print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
 
+# filename of galaxy map
+if galaxy_sample == "2MPZ":
+    gal_fn = "../galaxy_tests/2mpz_data/2MPZ.fits"
+elif galaxy_sample == "BOSS_North":
+    gal_fn = "../galaxy_tests/boss_data/galaxy_DR12v5_CMASS_North.fits"
+elif galaxy_sample == "BOSS_South":
+    gal_fn = "../galaxy_tests/boss_data/galaxy_DR12v5_CMASS_South.fits"
+elif "SDSS" in galaxy_sample:
+    gal_fn = "../galaxy_tests/sdss_data/V21_DR15_Catalog_v4.txt"
+    if "L43" in galaxy_sample:
+        L_lo = 4.3e10
+        if "D" in galaxy_sample:
+            L_hi = 6.1e10
+        else:
+            L_hi = 1.e20
+    elif "L61" in galaxy_sample:
+        L_lo = 6.1e10
+        if "D" in galaxy_sample:
+            L_hi = 7.9e10
+        else:
+            L_hi = 1.e20
+    elif "L79" in galaxy_sample:
+        L_lo = 7.9e10
+    
 # filename of CMB map
-#cmb_sample = "ACT_BN"
-cmb_sample = "ACT_D56"
 if cmb_sample == "ACT_BN":
-    fn = "../CMB_tests/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
-    msk_fn = "../CMB_tests/cmb_data/act_dr4.01_s14s15_BN_compsep_mask.fits"
+    fn = "../cmb_tests/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
+    msk_fn = "../cmb_tests/cmb_data/act_dr4.01_s14s15_BN_compsep_mask.fits"
 elif cmb_sample == "ACT_D56":
-    fn = "../CMB_tests/cmb_data/tilec_single_tile_D56_cmb_map_v1.2.0_joint.fits" # D56
-    msk_fn = "../CMB_tests/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
+    fn = "../cmb_tests/cmb_data/tilec_single_tile_D56_cmb_map_v1.2.0_joint.fits" # D56
+    msk_fn = "../cmb_tests/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
     
 # reading fits file
 mp = enmap.read_fits(fn)
 msk = enmap.read_fits(msk_fn)
 if cmb_sample == "ACT_BN":
     pass
-    #mp = mp[600:-600, 1500:-1500] # BN
-    #msk = msk[600:-600, 1500:-1500] # BN
 elif cmb_sample == "ACT_D56":
     pass
     
@@ -57,14 +80,15 @@ elif cmb_sample == "ACT_D56":
 save = 0
 if save:
     fig_name = (fn.split('/')[-1]).split('.fits')[0]
-    eshow(mp, fig_name, **{"colorbar":True, "range": 300, "ticks": 5, "downgrade": 4})
+    #eshow(mp, fig_name, **{"colorbar":True, "range": 300, "ticks": 5, "downgrade": 4})
+    eshow(msk, fig_name+"_mask", **{"colorbar":True, "ticks": 5, "downgrade": 4})
     plt.close()
 
 # map info
-print("shape and dtype = ", mp.shape, mp.dtype)
-print("wcs = ", mp.wcs)
-print("box (map) = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
-print("box (msk) = ", enmap.box(msk.shape, msk.wcs)/utils.degree)
+#print("shape and dtype = ", mp.shape, mp.dtype)
+#print("wcs = ", mp.wcs)
+#print("box (map) = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
+#print("box (msk) = ", enmap.box(msk.shape, msk.wcs)/utils.degree)
 decfrom = np.rad2deg(mp.box())[0, 0]
 rafrom = np.rad2deg(mp.box())[0, 1]
 decto = np.rad2deg(mp.box())[1, 0]
@@ -84,6 +108,9 @@ if galaxy_sample == '2MPZ':
 elif 'BOSS' in galaxy_sample:
     goal_size = 1.1*h # Mpc/h
     zmed = 0.5
+elif 'SDSS' in galaxy_sample:
+    goal_size = 1.1*h # Mpc/h
+    zmed = 0.5
 sigma_z = 0.01
 
 # create instance of the class "Class"
@@ -98,24 +125,29 @@ theta_arcmin_zmed = goal_size/D_A_zmed / utils.arcmin
 print("theta_arcmin_zmed = ", theta_arcmin_zmed)
 
 # load 2MPZ data
-hdul = fits.open(gal_fn)
 if galaxy_sample == '2MPZ':
+    hdul = fits.open(gal_fn)
     RA = hdul[1].data['RA'].flatten()/utils.degree # 0, 360
     DEC = hdul[1].data['DEC'].flatten()/utils.degree # -180, 180
-    #Z = hdul[1].data['ZPHOTO'].flatten()
-    Z = hdul[1].data['ZSPEC'].flatten()
+    Z = hdul[1].data['ZPHOTO'].flatten()
+    #Z = hdul[1].data['ZSPEC'].flatten()
     K_rel = hdul[1].data['KCORR'].flatten() # might be unnecessary since 13.9 is the standard
-    choice = (K_rel < 13.9) & (Z > 0.05) # original is 13.9
+    choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
 elif 'BOSS' in galaxy_sample:
+    hdul = fits.open(gal_fn)
     RA = hdul[1].data['RA'].flatten() # 0, 360
     DEC = hdul[1].data['DEC'].flatten() # -180, 180 # -10, 36
     Z = hdul[1].data['Z'].flatten()
-    #print(hdul[1].data['PSFFLUX'].flatten())
-    #print(hdul[1].data['EXPFLUX'].flatten())
-    #print(hdul[1].data['DEVFLUX'].flatten())
-    #print(hdul[1].data['MODELFLUX'].flatten())
     choice = np.ones(len(Z), dtype=bool)
-print("Zmin/max = ", Z.min(), Z.max())
+elif 'SDSS' in galaxy_sample:
+    data = ascii.read(gal_fn)
+    RA = data['ra'] # 0, 360
+    DEC = data['dec'] # -180, 180 # -10, 36
+    Z = data['z']
+    L = data['lum']
+    choice = (L_lo < L) & (L_hi >= L) 
+    #choice = np.ones(len(Z), dtype=bool)
+print("Zmin/max/med = ", Z.min(), Z.max(), np.median(Z))
 # transform to cartesian coordinates (checked)
 CX = np.cos(RA*utils.degree)*np.cos(DEC*utils.degree)
 CY = np.sin(RA*utils.degree)*np.cos(DEC*utils.degree)
@@ -127,17 +159,17 @@ print("DECmin/DECmax = ", DEC.min(), DEC.max())
 # make magnitude and RA/DEC cuts to  match ACT
 DEC_choice = (DEC <= decto) & (DEC > decfrom)
 if cmb_sample == 'ACT_D56':
-    RA_choice = (RA <= rafrom) | (RA > rato) # option 0
+    RA_choice = (RA <= rafrom) | (RA > rato)
 elif cmb_sample == 'ACT_BN':
-    RA_choice = (RA <= rafrom) & (RA > rato) # option 0
+    RA_choice = (RA <= rafrom) & (RA > rato)
 choice &= DEC_choice & RA_choice
-np.save(f"../pairwise/data/{galaxy_sample}_{cmb_sample}_index.npy", index[choice])
 RA = RA[choice]
 DEC = DEC[choice]
 Z = Z[choice]
 CX = CX[choice]
 CY = CY[choice]
 CZ = CZ[choice]
+index = index[choice]
 print("number of galaxies = ", np.sum(choice))
 
 # stack together normalized positions
@@ -172,11 +204,15 @@ if show_theta:
 
 # size of the stamps divided by two
 rApMaxArcmin = np.ceil(theta_arcmin*np.sqrt(2.)) # since sqrt2 is the max radius
-print("max radius of outer flux = ", rApMaxArcmin)
+print("max radius of outer flux ceiled = ", rApMaxArcmin.min(), rApMaxArcmin.max())
 
 delta_T_fn = f"data/{galaxy_sample:s}_{cmb_sample:s}_delta_Ts.npy"
 if os.path.exists(delta_T_fn):
     delta_Ts = np.load(delta_T_fn)
+    index_new = np.load(f"../pairwise/data/{galaxy_sample}_{cmb_sample}_index.npy")
+    choice = np.in1d(index, index_new)
+    Z = Z[choice]
+    P = P[choice]
 else:
     # compute the aperture photometry for each galaxy
     T_APs = np.zeros(len(RA))
@@ -196,6 +232,14 @@ else:
         # record T_AP
         T_APs[i] = calc_T_AP(stampMap, theta_arcmin[i], mask=stampMask)
 
+    # apply cuts because of masking
+    choice = T_APs != 0.
+    index = index[choice]
+    Z = Z[choice]
+    T_APs = T_APs[choice]
+    P = P[choice]
+    np.save(f"../pairwise/data/{galaxy_sample}_{cmb_sample}_index.npy", index)
+    
     # get the redshift-weighted one 
     # fast and elegant but resource-consuming
     #Ws = np.exp(-(Z[:, None]-Z[None, :])**2./(2.*sigma_z**2.))
@@ -209,8 +253,8 @@ else:
     
     # final quantity: temperature decrement around each galaxy
     delta_Ts = T_APs - bar_T_APs
-    np.save(delta_T_fn, delta_Ts)
 
+    np.save(delta_T_fn, delta_Ts)
     print("percentage of objects for which the mask is zeros everywhere = ", zeros_everywhere*100./len(RA))
 
 # define bins in Mpc/h
@@ -224,6 +268,7 @@ boxsize = 0. # this is not used since we are on the sky
 dtype = np.float32
 P = P.astype(dtype)
 delta_Ts = delta_Ts.astype(dtype)
+assert P.shape[0] == len(delta_Ts)
 
 if want_jackknife:
     # number of jackknife samples
@@ -259,9 +304,13 @@ if want_jackknife:
     np.save(f"data/{galaxy_sample:s}_{cmb_sample}_PV_err.npy", PV_err)
     np.save(f"data/{galaxy_sample:s}_{cmb_sample}_rbinc.npy", rbinc)
 else:
+    print("starting...")
+    t1 = time.time()
     # calculate the pairwise velocity
     DD, PV = pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
-    
+    print("done!")
+    print(time.time()-t1)
+        
     # save arrays
     np.save(f"data/{galaxy_sample:s}_{cmb_sample}_DD.npy", DD)
     np.save(f"data/{galaxy_sample:s}_{cmb_sample}_PV.npy", PV)
@@ -270,6 +319,7 @@ else:
     
 # plot pairwise velocity
 plt.figure(figsize=(9, 7))
+plt.plot(rbinc, np.zeros(len(PV)), 'k--')
 plt.plot(rbinc, PV)
 plt.ylabel(r"$\hat p_{kSZ}(r) \ [\mu{\rm K}]$")
 plt.xlabel(r"$r \ [{\rm Mpc}/h]$")
