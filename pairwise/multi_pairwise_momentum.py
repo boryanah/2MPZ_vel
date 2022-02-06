@@ -29,6 +29,8 @@ DEFAULTS['projCutout'] = 'cea' # projection
 DEFAULTS['galaxy_sample'] = "SDSS_L79"
 DEFAULTS['cmb_sample'] = "ACT_BN"
 DEFAULTS['error_estimate'] = "none"
+DEFAULTS['n_sample'] = 100
+DEFAULTS['data_dir'] = "/mnt/marvin1/boryanah/2MPZ_vel/"
 
 # cosmological parameters
 wb = 0.02225
@@ -125,13 +127,16 @@ def create_shared_array(dtype, shape):
     # Get a ctype type from the NumPy dtype.
     cdtype = np.ctypeslib.as_ctypes_type(dtype)
     # Create the RawArray instance.
-    shared_arr = multiprocessing.RawArray(cdtype, sum(shape))
+    try:
+        shared_arr = multiprocessing.RawArray(cdtype, shape[0]*shape[1]) # sum(shape)) # B.H. bug?
+    except:
+        shared_arr = multiprocessing.RawArray(cdtype, shape[0]) # sum(shape)) # B.H. bug?
     # Get a NumPy array view.
     arr = shared_to_numpy(shared_arr, dtype, shape)
     return shared_arr, arr
 
 
-def parallel_function(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout):
+def parallel_aperture(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout):
     """This function is called in parallel in the different processes. It takes an index range in
     the shared array, and fills in some values there."""
     i0, i1 = index_range
@@ -140,7 +145,7 @@ def parallel_function(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxAr
     # Here, this is the case because the ranges are not overlapping, and all processes receive
     # a different range.
     mp = enmap.ndmap(mp, wcs)
-    msk = enmap.ndmap(msk, wcs)
+    msk = enmap.ndmap(msk, wcs) # this is necessary since this operation sheds the ndmap coating
     #dT = np.zeros(i1-i0) # i get why this was failing cause its indexing is from 0 to i1-i0
     for i in range(i0, i1):
         if i % 1000 == 0: print(i)
@@ -148,13 +153,29 @@ def parallel_function(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxAr
         T_APs[i] = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
     #T_APs[i0:i1] = dT
 
+def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_sample):
+    """This function is called in parallel in the different processes. It takes an index range in
+    the shared array, and fills in some values there."""
+    i0, i1 = index_range
+    PV_jack = shared_to_numpy(*shared_arr)
+    # WARNING: need to make sure that two processes do not write to the same part of the array.
+    # Here, this is the case because the ranges are not overlapping, and all processes receive
+    # a different range.
+    n_jump = len(inds)//n_sample
+    for i in range(i0, i1):
+        # calculate the pairwise velocity
+        t1 = time.time()
+        new_inds = np.delete(inds, np.arange(n_jump*i, n_jump*(i+1)))
+        DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        print("jackknife sample took = ", i, time.time()-t1)
+        PV_jack[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, Theta, vary_Theta=False, want_plot=False):
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False):
     print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
     vary_str = "vary" if vary_Theta else "fixed"
     
     # load CMB map and mask
-    mp, msk = load_cmb_sample(cmb_sample)
+    mp, msk = load_cmb_sample(cmb_sample, data_dir)
 
     # map info
     cmb_box = {}
@@ -166,7 +187,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, The
     print("cmb bounds = ", cmb_box.items())
 
     # load galaxies
-    RA, DEC, Z, index = load_galaxy_sample(galaxy_sample, cmb_sample, cmb_box)
+    RA, DEC, Z, index = load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box)
 
     # create instance of the class "Class"
     Cosmo = Class()
@@ -203,14 +224,14 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, The
     
     # size of the stamps divided by two
     #rApMaxArcmin = np.ceil(theta_arcmin*np.sqrt(2.)) # since sqrt2 is the max radius
-    rApMaxArcmin = theta_arcmin # in util.py multiplied by sqrt2
+    rApMaxArcmin = theta_arcmin # in util.py multiplied by sqrt2 * 2 and ceil for size of canvas
     print("max radius of outer flux ceiled = ", rApMaxArcmin.min(), rApMaxArcmin.max())
 
     # convert to pixell coordinates
     RA[RA > 180.] -= 360.
 
     delta_T_fn = f"data/{galaxy_sample:s}_{cmb_sample:s}_{vary_str:s}Th{Theta:.2f}_delta_Ts.npy"
-    index_fn = f"../pairwise/data/{galaxy_sample}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
+    index_fn = f"data/{galaxy_sample}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
     if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
         delta_Ts = np.load(delta_T_fn)
         index_new = np.load(index_fn)
@@ -236,7 +257,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, The
         # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
         with closing(multiprocessing.Pool(n_processes, initializer=_init, initargs=((shared_arr, dtype, shape),))) as p:   
             # Call parallel_function in parallel.
-            p.starmap(parallel_function, zip(index_ranges, repeat(mp.wcs), repeat(mp), repeat(msk), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
+            p.starmap(parallel_aperture, zip(index_ranges, repeat(mp.wcs), repeat(mp), repeat(msk), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
         # Close the processes.
         p.join()
 
@@ -266,7 +287,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, The
     # define bins in Mpc
     rbins = np.linspace(0., 150., 16) # Mpc
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
-    nthread = os.cpu_count()
+    nthread = 8 # os.cpu_count()
     is_log_bin = False
 
     # change dtype to speed up calculation
@@ -276,8 +297,34 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, The
     assert P.shape[0] == len(delta_Ts)
 
     if want_error == "jackknife":
+        # For simplicity, make sure the total size is a multiple of the number of processes.
+        n_processes = 50#os.cpu_count() # tuks
+        n = n_sample // n_processes
+        index_ranges = []
+        for k in range(n_processes-1):
+            index_ranges.append((k * n, (k + 1) * n))
+        index_ranges.append(((k + 1) * n, n_sample))
+        index_ranges = np.array(index_ranges)
+
+        # Initialize a shared array.
+        dtype = np.float64; shape = ((len(rbins)-1, n_sample))
+        shared_arr, PV_jack = create_shared_array(dtype, shape)
+        PV_jack.flat[:] = np.zeros(shape, dtype=dtype)
+
+        # randomize indices for performing jackknifes
+        inds = np.arange(len(delta_Ts))
+        np.random.shuffle(inds)
+        
+        # compute the pairwise signal for each sample
+        # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
+        with closing(multiprocessing.Pool(n_processes, initializer=_init, initargs=((shared_arr, dtype, shape),))) as p:   
+            # Call parallel_function in parallel.
+            p.starmap(parallel_jackknife_pairwise, zip(index_ranges, repeat(inds), repeat(P), repeat(delta_Ts), repeat(rbins), repeat(is_log_bin), repeat(dtype), repeat(nthread), repeat(n_sample)))
+        # Close the processes.
+        p.join()
+
         # compute jackknifes
-        PV_jack, PV_mean, PV_err = jackknife_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        #PV_jack, PV_mean, PV_err = jackknife_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
 
         # save arrays
         np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack.npy", PV_jack)
@@ -336,8 +383,10 @@ if __name__ == "__main__":
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--projCutout', help='Projection of the cutout', default=DEFAULTS['projCutout'])
     parser.add_argument('--want_error', '-error', help='Perform jackknife/bootstrap/none error computation of pairwise momentum', default=DEFAULTS['error_estimate'], choices=["none", "jackknife", "bootstrap"])
+    parser.add_argument('--n_sample', help='Number of samples when performing jackknife/bootstrap', type=int, default=DEFAULTS['n_sample'])
     parser.add_argument('--Theta', '-Th', help='Aperture radius in arcmin', type=float, default=None)
     parser.add_argument('--vary_Theta', '-vary', help='Vary the aperture radius', action='store_true')
+    parser.add_argument('--data_dir', help='Directory where the data is stored', default=DEFAULTS['data_dir'])
     parser.add_argument('--want_plot', '-plot', help='Plot the final pairwise momentum function', action='store_true')
     args = vars(parser.parse_args())
 

@@ -32,14 +32,14 @@ def get_P_D_A(Cosmo, RA, DEC, Z):
     P = P*CD[:, None]
     return P, D_A
 
-def load_cmb_sample(cmb_sample, save=False):
+def load_cmb_sample(cmb_sample, data_dir, save=False):
     # filename of CMB map
     if cmb_sample == "ACT_BN":
-        fn = "../cmb_tests/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
-        msk_fn = "../cmb_tests/cmb_data/act_dr4.01_s14s15_BN_compsep_mask.fits"
+        fn = data_dir+"/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
+        msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_BN_compsep_mask.fits"
     elif cmb_sample == "ACT_D56":
-        fn = "../cmb_tests/cmb_data/tilec_single_tile_D56_cmb_map_v1.2.0_joint.fits" # D56
-        msk_fn = "../cmb_tests/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
+        fn = data_dir+"/cmb_data/tilec_single_tile_D56_cmb_map_v1.2.0_joint.fits" # D56
+        msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
 
     # reading fits file
     mp = enmap.read_fits(fn)
@@ -53,17 +53,17 @@ def load_cmb_sample(cmb_sample, save=False):
         plt.close()
     return mp, msk
 
-def load_galaxy_sample(galaxy_sample, cmb_sample, cmb_box):
+def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
 
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
-        gal_fn = "../galaxy_tests/2mpz_data/2MPZ.fits"
+        gal_fn = data_dir+"/2mpz_data/2MPZ.fits"
     elif galaxy_sample == "BOSS_North":
-        gal_fn = "../galaxy_tests/boss_data/galaxy_DR12v5_CMASS_North.fits"
+        gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_North.fits"
     elif galaxy_sample == "BOSS_South":
-        gal_fn = "../galaxy_tests/boss_data/galaxy_DR12v5_CMASS_South.fits"
+        gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_South.fits"
     elif "SDSS" in galaxy_sample:
-        gal_fn = "../galaxy_tests/sdss_data/V21_DR15_Catalog_v4.txt"
+        gal_fn = data_dir+"/sdss_data/V21_DR15_Catalog_v4.txt"
     
     # load galaxy sample
     if galaxy_sample == '2MPZ':
