@@ -4,18 +4,16 @@ import matplotlib.pyplot as plt
 import plotparams
 plotparams.buba()
 
-#galaxy_samples = ["2MPZ", "SDSS_L43", "SDSS_L61", "SDSS_L79"]
-galaxy_samples = ["SDSS_L61", "SDSS_L79"]
+galaxy_samples = ["2MPZ", "SDSS_L43", "SDSS_L61", "SDSS_L79"]
 cmb_sample1 = "ACT_D56"
 cmb_sample2 = "ACT_BN"
 
 #error_type = "jack"
 error_type = "boot"
 vary_Theta = False
-#Thetas = [10.75, 2.1, 2.1, 2.1]
-Thetas = [2.1, 2.1]
-plot_corr = True
-
+Thetas1 = [10.75, 2.1, 2.1, 2.1]
+Thetas2 = [10.68, 2.1, 2.1, 2.1]
+plot_corr = False
 
 vary_str = "vary" if vary_Theta else "fixed"
 
@@ -25,10 +23,11 @@ plt.subplots(2, 2, figsize=(14, 9))
 plt.subplots_adjust(top=0.95, right=0.95, wspace=0.3, hspace=0.3)
 for i in range(len(galaxy_samples)):
     galaxy_sample = galaxy_samples[i]
-    Theta = Thetas[i]
+    Theta1 = Thetas1[i]
+    Theta2 = Thetas2[i]
 
-    PV_2D1 = np.load(f"data/{galaxy_sample:s}_{cmb_sample1}_{vary_str:s}Th{Theta:.2f}_PV_{error_type:s}.npy")
-    PV_2D2 = np.load(f"data/{galaxy_sample:s}_{cmb_sample2}_{vary_str:s}Th{Theta:.2f}_PV_{error_type:s}.npy")
+    PV_2D1 = np.load(f"data/{galaxy_sample:s}_{cmb_sample1}_{vary_str:s}Th{Theta1:.2f}_PV_{error_type:s}.npy")
+    PV_2D2 = np.load(f"data/{galaxy_sample:s}_{cmb_sample2}_{vary_str:s}Th{Theta2:.2f}_PV_{error_type:s}.npy")
     assert PV_2D1.shape == PV_2D2.shape
     if plot_corr:
         PV_corr1 = np.corrcoef(PV_2D1)
@@ -40,6 +39,7 @@ for i in range(len(galaxy_samples)):
         plt.subplots()
         plt.imshow(PV_corr2-np.eye(PV_corr2.shape[0]))
         plt.colorbar()
+        plt.show()
 
     n_sample = PV_2D1.shape[1]
     if error_type == 'jack':
@@ -69,7 +69,6 @@ for i in range(len(galaxy_samples)):
     
     plt.subplot(2, 2, i+1)
     plt.plot(rbinc, np.zeros(len(PV_mean)), 'k--')
-    plt.errorbar(rbinc, PV_mean, yerr=PV_err, capsize=4.)
     plt.errorbar(rbinc, PV_mean, yerr=PV_err, capsize=4.)
     
     plt.ylabel(r"$\hat p_{kSZ}(r) \ [\mu {\rm K}]$")

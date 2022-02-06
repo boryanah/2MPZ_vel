@@ -12,4 +12,4 @@ factor = 0.09187562/0.14437036
 target_2MPZ = target_SDSS * factor # Mpc
 target_2MPZ /= 1./(1+z_2MPZ) # cMpc
 print("comoving Mpc target 2MPZ = ", target_2MPZ)
-# 0.5 or 0.6 depending on number density
+# 0.5 or 0.6 depending on number density 0.792 if assuming same proper size

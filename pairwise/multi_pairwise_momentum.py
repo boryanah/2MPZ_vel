@@ -181,7 +181,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, The
     if "SDSS" in galaxy_sample:
         goal_size = 1.1 # Mpc (comoving)
     elif "2MPZ" in galaxy_sample:
-        goal_size = 0.6 # Mpc (comoving) 0.5 or 0.6 see target.py in hydro_tests/
+        goal_size = 0.6 # Mpc (comoving) 0.5 or 0.6 or 0.792 see target.py in hydro_tests/
     goal_size *= 1./(1+zmed) # Mpc (proper)
     sigma_z = 0.01
     print("median redshift = ", zmed)
