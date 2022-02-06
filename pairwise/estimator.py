@@ -14,7 +14,6 @@ def pairwise_momentum(X, dT, bins, is_log_bin, dtype=np.float32, nthread=1):
     V_los is independently measured
     Does not use periodic boundary conditions
     """
-    # TODO: check that the pairwise velocity thingy works
 
     # multithreading
     numba.set_num_threads(nthread)
@@ -73,8 +72,7 @@ def pairwise_momentum(X, dT, bins, is_log_bin, dtype=np.float32, nthread=1):
             dx = x1-x2
             dy = y1-y2
             dz = z1-z2
-            dist2 = dx**two + dy**two + dz**two
-            dist = np.sqrt(dist2)
+            dist = np.sqrt(dx**two + dy**two + dz**two)
 
             # index where this pair belongs
             if is_log_bin:

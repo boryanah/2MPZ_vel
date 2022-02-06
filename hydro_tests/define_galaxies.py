@@ -5,17 +5,23 @@ import plotparams
 plotparams.buba()
 
 fp_dm = 'fp'
-#data_dir = "/mnt/alan1/boryanah/MTNG/data_fp/"; pos_unit = 1.; Lbox = 500. Mpc/h
-data_dir = "/mnt/gosling1/boryanah/TNG300/"; pos_unit = 1.e3; Lbox = 205.
-#snapshot = 264
-snapshot = 99
+data_dir = "/mnt/alan1/boryanah/MTNG/data_fp/"; pos_unit = 1.; Lbox = 500. # cMpc/h
+#data_dir = "/mnt/gosling1/boryanah/TNG300/"; pos_unit = 1.e3; Lbox = 205. # cMpc/h
+snapshot = 264; z = 0.
+#snapshot = 214; z = 0.5
+#snapshot = 237; z = 0.245
+#snapshot = 99
 if snapshot == 99:
     snap_str = ""
 else:    
     snap_str = f"_{snapshot:d}"
-    
+h = 0.6744
+
 # load subhalo fields at z = 0
-SubhaloGrNr = np.load(f"{data_dir:s}/SubhaloGrNr_{fp_dm:s}{snap_str:s}.npy")
+if 'MTNG' in data_dir:
+    SubhaloGrNr = np.load(f"{data_dir:s}/SubhaloGroupNr_{fp_dm:s}{snap_str:s}.npy")
+else:
+    SubhaloGrNr = np.load(f"{data_dir:s}/SubhaloGrNr_{fp_dm:s}{snap_str:s}.npy")
 SubhaloStellarPhotometrics = np.load(f"{data_dir:s}/SubhaloStellarPhotometrics_{fp_dm:s}{snap_str:s}.npy") #U, B, V, K, g, r, i, z [mag]
 SubhaloMstar = np.load(f"{data_dir:s}/SubhaloMassType_{fp_dm:s}{snap_str:s}.npy")[:, 4]*1.e10
 SubhaloSFR = np.load(f"{data_dir:s}/SubhaloSFR_{fp_dm:s}{snap_str:s}.npy")
@@ -24,9 +30,10 @@ SubhalosSFR[SubhaloMstar == 0.] = 0.
 
 # load halo fields
 Group_M_TopHat200 = np.load(f"{data_dir:s}/Group_M_TopHat200_{fp_dm:s}{snap_str:s}.npy")*1.e10
+Group_R_TopHat200 = np.load(f"{data_dir:s}/Group_R_TopHat200_{fp_dm:s}{snap_str:s}.npy")/pos_unit # comoving Mpc/h
 
 # how many galaxies
-ngal = 1.e-2 # gal/(Mpc/h)^3
+ngal = 1.e-4 # gal/(Mpc/h)^3
 Ngal = int(ngal*Lbox**3)
 print("number of galaxies = ", Ngal)
 print("number density of galaxies = ", ngal)
@@ -48,6 +55,19 @@ par_mass = Group_M_TopHat200[par_inds]
 par_mass_cent = Group_M_TopHat200[par_inds_cent]
 gal_mass = SubhaloMstar[gal_inds]
 gal_ssfr = SubhalosSFR[gal_inds]
+
+par_r200 = Group_R_TopHat200[gal_inds]
+par_r200 /= h #cMpc
+print("redshift = ", z )
+print("median and mean r200 [cMpc] = ", np.median(par_r200), np.mean(par_r200)) # 0.068, 0.082
+print("median and mean r200 [Mpc] = ", np.median(par_r200)*1./(1+z), np.mean(par_r200)*1./(1+z)) 
+rbins = np.geomspace(0.01, par_r200.max(), 51)
+rbinc = (rbins[1:] + rbins[:-1]) * .5
+hist, _ = np.histogram(par_r200, bins=rbins)
+plt.plot(rbinc, hist)
+plt.xscale("log")
+plt.xlabel("Comoving radius [Mpc]")
+plt.show()
 
 # mass bins
 mbins = np.logspace(11, 15, 41)

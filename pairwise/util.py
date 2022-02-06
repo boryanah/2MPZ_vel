@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import numba
+from scipy import interpolate
 
 from pixell import enmap, reproject, enplot, curvedsky, utils
 
@@ -60,7 +62,7 @@ def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pat
         stampMask[:, :] = cmbMask.at(ipos, prefilter=True, mask_nan=False, order=1)
     
         # re-threshold the mask map, to keep 0 and 1 only
-        stampMask[:, :] = 1.*(stampMask[:,:]>0.5)
+        stampMask[:, :] = 1.*(stampMask[:, :]>0.5)
     
     if test:
         print("Extracted cutouts around ra=", ra, "dec=", dec)
@@ -74,6 +76,52 @@ def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pat
     if cmbMask is not None:
         return opos, stampMap, stampMask
     return opos, stampMap
+
+@numba.guvectorize(['float64[:],float64[:],float64[:],float64[:],'
+                    'float64[:],float64[:]'],
+                   '(n),(n),(),()->(),()', target='parallel')
+def get_tzav_and_w_nb(dT, z, zj, sigma_z, res1, res2):
+    '''Launched by get_tzav to compute formula in parallel '''
+    for i in range(dT.shape[0]):
+        res1 += dT[i] * np.exp(-(zj[0]-z[i])**2.0/(2.0*sigma_z**2))
+        res2 += np.exp(-(zj[0]-z[i])**2/(2.0*sigma_z**2))
+
+def get_tzav(dTs, zs, sigma_z):
+    '''Computes the dT dependency to redshift.
+    dTs: Temperature decrements
+    zs: redshifts
+    sigma_z: width of the gaussian to smooth out the moving window.'''
+    #To test, run test_get_tzav_nb
+    #   Create empty arrays to be used by numba in get_tzav_and_w_nb'''
+    res1 = np.zeros(dTs.shape[0])
+    res2 = np.zeros(dTs.shape[0])
+    get_tzav_and_w_nb(dTs, zs, zs, sigma_z, res1, res2)
+    return res1/res2
+
+
+def get_tzav_fast(dTs, zs, sigma_z):
+    '''Subsample and interpolate Tzav to make it fast.
+    dTs: entire list of dT decrements
+    zs: entire list of redshifts
+    sigma_z: width of the gaussian kernel we want to apply.
+    '''
+    N_samples_in_sigmaz = 15  # in one width of sigmaz use Nsamples
+    zmin, zmax = zs.min(), zs.max()
+    delta_z = zmax - zmin
+
+    # evaluates Tzav N times
+    N_samples = int(round(delta_z/sigma_z)) * N_samples_in_sigmaz
+    z_subsampled = np.linspace(zmin, zmax, N_samples)
+
+    #now compute tzav as we usually do.
+    res1 = np.zeros(z_subsampled.shape[0])
+    res2 = np.zeros(z_subsampled.shape[0])
+    get_tzav_and_w_nb(dTs, zs, z_subsampled, sigma_z, res1, res2)
+    tzav_subsampled = res1/res2
+    #interpolate
+    f = interpolate.interp1d(z_subsampled, tzav_subsampled, kind='cubic')
+    tzav_fast = f(zs)
+    return tzav_fast
 
 def calc_T_AP(imap, rad_arcmin, test=False, mask=None):
     modrmap = imap.modrmap()
