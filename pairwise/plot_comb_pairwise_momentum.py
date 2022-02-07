@@ -9,13 +9,11 @@ cmb_sample1 = "ACT_D56"
 cmb_sample2 = "ACT_BN"
 
 #error_type = "jack"
-error_type = "boot"
-vary_Theta = False
+error_types = ["boot", "boot", "boot", "boot"]
+vary_Thetas = [False, False, False, False]
 Thetas1 = [10.75, 2.1, 2.1, 2.1]
 Thetas2 = [10.68, 2.1, 2.1, 2.1]
 plot_corr = False
-
-vary_str = "vary" if vary_Theta else "fixed"
 
 rbinc = np.load(f"data/rbinc.npy")
 
@@ -23,12 +21,16 @@ plt.subplots(2, 2, figsize=(14, 9))
 plt.subplots_adjust(top=0.95, right=0.95, wspace=0.3, hspace=0.3)
 for i in range(len(galaxy_samples)):
     galaxy_sample = galaxy_samples[i]
+    error_type = error_types[i]
+    vary_Theta = vary_Thetas[i]
     Theta1 = Thetas1[i]
     Theta2 = Thetas2[i]
-
+    
+    vary_str = "vary" if vary_Theta else "fixed"
+    
     PV_2D1 = np.load(f"data/{galaxy_sample:s}_{cmb_sample1}_{vary_str:s}Th{Theta1:.2f}_PV_{error_type:s}.npy")
     PV_2D2 = np.load(f"data/{galaxy_sample:s}_{cmb_sample2}_{vary_str:s}Th{Theta2:.2f}_PV_{error_type:s}.npy")
-    assert PV_2D1.shape == PV_2D2.shape
+    assert PV_2D1.shape == PV_2D2.shape # assumption is we've chosen the same number of samples for both
     if plot_corr:
         PV_corr1 = np.corrcoef(PV_2D1)
         PV_corr2 = np.corrcoef(PV_2D2)
@@ -60,8 +62,6 @@ for i in range(len(galaxy_samples)):
     PV_std2 = np.sqrt(np.diag(PV_cov2))
     print("std vs err 1 = ", (PV_err1-PV_std1)*100./PV_err1)
     print("std vs err 2 = ", (PV_err2-PV_std2)*100./PV_err2)
-
-
     
     inv_Err2 = 1./PV_err1**2 + 1./PV_err2**2
     PV_mean = (PV_mean1/PV_err1**2 + PV_mean2/PV_err2**2)/inv_Err2 
