@@ -89,7 +89,6 @@ def bootstrap_pairwise_momentum(P, delta_Ts, rbins, is_log_bin, dtype, nthread, 
     PV_2D = np.zeros((len(rbins)-1, n_boot))
     DD_2D = np.zeros((len(rbins)-1, n_boot))
     inds = np.arange(len(delta_Ts))
-    n_jump = len(inds)//n_boot
     for i in range(n_boot):
         # calculate the pairwise velocity
         t1 = time.time()
@@ -169,6 +168,22 @@ def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
         print("jackknife sample took = ", i, time.time()-t1)
         PV_jack[:, i] = PV
+
+def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread):
+    """This function is called in parallel in the different processes. It takes an index range in
+    the shared array, and fills in some values there."""
+    i0, i1 = index_range
+    PV_boot = shared_to_numpy(*shared_arr)
+    # WARNING: need to make sure that two processes do not write to the same part of the array.
+    # Here, this is the case because the ranges are not overlapping, and all processes receive
+    # a different range.
+    for i in range(i0, i1):
+        # calculate the pairwise velocity
+        t1 = time.time()
+        new_inds = np.random.choice(inds, len(inds))
+        DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        print("bootstrap sample took = ", i, time.time()-t1)
+        PV_boot[:, i] = PV
 
 def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False):
     print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
@@ -334,8 +349,34 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_jack_mean.npy", DD_mean)
         #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_jack_err.npy", DD_err)
     elif want_error == "bootstrap":
+        # For simplicity, make sure the total size is a multiple of the number of processes.
+        n_processes = 20 #os.cpu_count() 
+        n = n_sample // n_processes
+        index_ranges = []
+        for k in range(n_processes-1):
+            index_ranges.append((k * n, (k + 1) * n))
+        index_ranges.append(((k + 1) * n, n_sample))
+        index_ranges = np.array(index_ranges)
+
+        # Initialize a shared array.
+        dtype = np.float64; shape = ((len(rbins)-1, n_sample))
+        shared_arr, PV_boot = create_shared_array(dtype, shape)
+        PV_boot.flat[:] = np.zeros(shape, dtype=dtype)
+
+        # randomize indices for performing bootstraps
+        inds = np.arange(len(delta_Ts))
+        
+        # compute the pairwise signal for each sample
+        # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
+        with closing(multiprocessing.Pool(n_processes, initializer=_init, initargs=((shared_arr, dtype, shape),))) as p:   
+            # Call parallel_function in parallel.
+            p.starmap(parallel_bootstrap_pairwise, zip(index_ranges, repeat(inds), repeat(P), repeat(delta_Ts), repeat(rbins), repeat(is_log_bin), repeat(dtype), repeat(nthread)))
+        # Close the processes.
+        p.join()
+
+        
         # compute bootstraps
-        PV_boot, PV_mean, PV_err = bootstrap_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        #PV_boot, PV_mean, PV_err = bootstrap_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
 
         # save arrays
         np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot.npy", PV_boot)
