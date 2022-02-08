@@ -148,9 +148,8 @@ def parallel_aperture(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxAr
     #dT = np.zeros(i1-i0) # i get why this was failing cause its indexing is from 0 to i1-i0
     for i in range(i0, i1):
         if i % 1000 == 0: print(i)
-        #dT[i] = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
         T_APs[i] = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
-    #T_APs[i0:i1] = dT
+
 
 def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_sample):
     """This function is called in parallel in the different processes. It takes an index range in
@@ -185,7 +184,7 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_boot[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False):
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False, not_parallel=False):
     print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
     vary_str = "vary" if vary_Theta else "fixed"
     
@@ -254,35 +253,36 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         Z = Z[choice]
         P = P[choice]
     else:
-        # For simplicity, make sure the total size is a multiple of the number of processes.
-        n_processes = os.cpu_count()
-        n = len(RA) // n_processes
-        index_ranges = []
-        for k in range(n_processes-1):
-            index_ranges.append((k * n, (k + 1) * n))
-        index_ranges.append(((k + 1) * n, len(RA)))
-        index_ranges = np.array(index_ranges)
-        
-        # Initialize a shared array.
-        dtype = np.float64; shape = (len(RA),)
-        shared_arr, T_APs = create_shared_array(dtype, shape)
-        T_APs.flat[:] = np.zeros(len(RA))
+        if not_parallel:
+            # non-parallelized version
+            T_APs = np.zeros(len(RA))
+            for i in range(len(RA)):
+                if i % 1000 == 0: print("i = ", i)
+                T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
+                T_APs[i] = T_AP
+        else:
+            # For simplicity, make sure the total size is a multiple of the number of processes.
+            n_processes = os.cpu_count()
+            n = len(RA) // n_processes
+            index_ranges = []
+            for k in range(n_processes-1):
+                index_ranges.append((k * n, (k + 1) * n))
+            index_ranges.append(((k + 1) * n, len(RA)))
+            index_ranges = np.array(index_ranges)
 
-        # compute the aperture photometry for each galaxy
-        # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
-        with closing(multiprocessing.Pool(n_processes, initializer=_init, initargs=((shared_arr, dtype, shape),))) as p:   
-            # Call parallel_function in parallel.
-            p.starmap(parallel_aperture, zip(index_ranges, repeat(mp.wcs), repeat(mp), repeat(msk), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
-        # Close the processes.
-        p.join()
+            # Initialize a shared array.
+            dtype = np.float64; shape = (len(RA),)
+            shared_arr, T_APs = create_shared_array(dtype, shape)
+            T_APs.flat[:] = np.zeros(len(RA))
 
-        # non-parallelized version
-        #T_APs = np.zeros(len(RA))
-        #for i in range(len(RA)):
-        #    if i % 1000 == 0: print("i = ", i)
-        #    T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
-        #    T_APs[i] = T_AP
-
+            # compute the aperture photometry for each galaxy
+            # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
+            with closing(multiprocessing.Pool(n_processes, initializer=_init, initargs=((shared_arr, dtype, shape),))) as p:   
+                # Call parallel_function in parallel.
+                p.starmap(parallel_aperture, zip(index_ranges, repeat(mp.wcs), repeat(mp), repeat(msk), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
+            # Close the processes.
+            p.join()
+            
         # apply cuts because of masking
         choice = T_APs != 0.
         T_APs = T_APs[choice]
@@ -429,6 +429,7 @@ if __name__ == "__main__":
     parser.add_argument('--vary_Theta', '-vary', help='Vary the aperture radius', action='store_true')
     parser.add_argument('--data_dir', help='Directory where the data is stored', default=DEFAULTS['data_dir'])
     parser.add_argument('--want_plot', '-plot', help='Plot the final pairwise momentum function', action='store_true')
+    parser.add_argument('--not_parallel', help='Do serial computation of aperture rather than parallel', action='store_true')
     args = vars(parser.parse_args())
 
     main(**args)
