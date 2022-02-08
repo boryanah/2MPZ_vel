@@ -5,6 +5,7 @@ Usage
 $ ./multi_pairwise_momentum.py --help
 """
 import os
+import gc
 import time
 import argparse
 
@@ -117,7 +118,6 @@ def shared_to_numpy(shared_arr, dtype, shape):
     No copy is involved, the array reflects the underlying shared buffer."""
     return np.frombuffer(shared_arr, dtype=dtype).reshape(shape)
 
-
 def create_shared_array(dtype, shape):
     """Create a new shared array. Return the shared array pointer, and a NumPy array view to it.
     Note that the buffer values are not initialized.
@@ -127,13 +127,25 @@ def create_shared_array(dtype, shape):
     cdtype = np.ctypeslib.as_ctypes_type(dtype)
     # Create the RawArray instance.
     try:
-        shared_arr = multiprocessing.RawArray(cdtype, shape[0]*shape[1]) # sum(shape)) # B.H. bug?
+        shared_arr = multiprocessing.RawArray(cdtype, shape[0]*shape[1])
     except:
         shared_arr = multiprocessing.RawArray(cdtype, shape[0]) # sum(shape)) # B.H. bug?
     # Get a NumPy array view.
     arr = shared_to_numpy(shared_arr, dtype, shape)
     return shared_arr, arr
 
+def _init3(shared_arr_, shared_map_, shared_mask_):
+    # The shared array pointer is a global variable so that it can be accessed by the
+    # child processes. It is a tuple (pointer, dtype, shape).
+    global shared_arr, shared_map, shared_mask
+    shared_arr = shared_arr_
+    shared_map = shared_map_
+    shared_mask = shared_mask_
+
+def shared_to_numpy3(shared_arr, dtype, shape, shared_map, dtype_map, shape_map, shared_mask, dtype_mask, shape_mask):
+    """Get a NumPy array from a shared memory buffer, with a given dtype and shape.
+    No copy is involved, the array reflects the underlying shared buffer."""
+    return np.frombuffer(shared_arr, dtype=dtype).reshape(shape), np.frombuffer(shared_map, dtype=dtype_map).reshape(shape_map), np.frombuffer(shared_mask, dtype=dtype_mask).reshape(shape_mask)
 
 def parallel_aperture(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout):
     """This function is called in parallel in the different processes. It takes an index range in
@@ -145,10 +157,27 @@ def parallel_aperture(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxAr
     # a different range.
     mp = enmap.ndmap(mp, wcs)
     msk = enmap.ndmap(msk, wcs) # this is necessary since this operation sheds the ndmap coating
-    #dT = np.zeros(i1-i0) # i get why this was failing cause its indexing is from 0 to i1-i0
+
     for i in range(i0, i1):
         if i % 1000 == 0: print(i)
         T_APs[i] = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
+
+def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout):
+    """This function is called in parallel in the different processes. It takes an index range in
+    the shared array, and fills in some values there."""
+    i0, i1 = index_range
+    T_APs, new_mp, new_msk = shared_to_numpy3(*shared_arr, *shared_map, *shared_mask)
+    # WARNING: need to make sure that two processes do not write to the same part of the array.
+    # Here, this is the case because the ranges are not overlapping, and all processes receive
+    # a different range.
+    new_mp = enmap.ndmap(new_mp, wcs)
+    new_msk = enmap.ndmap(new_msk, wcs) # this is necessary since this operation sheds the ndmap coating
+    #print(T_APs[:10], new_mp.shape, new_msk.shape)
+    #print(new_mp[:2], new_msk[:2])
+    
+    for i in range(i0, i1):
+        if i % 1000 == 0: print(i)
+        T_APs[i] = compute_aperture(new_mp, new_msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
 
 
 def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_sample):
@@ -261,6 +290,40 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
                 T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
                 T_APs[i] = T_AP
         else:
+
+            # For simplicity, make sure the total size is a multiple of the number of processes.
+            n_processes = os.cpu_count()
+            n = len(RA) // n_processes
+            index_ranges = []
+            for k in range(n_processes-1):
+                index_ranges.append((k * n, (k + 1) * n))
+            index_ranges.append(((k + 1) * n, len(RA)))
+            index_ranges = np.array(index_ranges)
+
+            # Initialize a shared array.
+            dtype = np.float64; shape = (len(RA),)
+            shared_arr, T_APs = create_shared_array(dtype, shape)
+            T_APs.flat[:] = np.zeros(len(RA))
+
+            # Initialize a shared array.
+            dtype_map = np.float64; shape_map = (mp.shape[0], mp.shape[1])
+            shared_map, new_mp = create_shared_array(dtype_map, shape_map)
+            new_mp.flat[:] = mp[:, :]
+            
+            # Initialize a shared array.
+            dtype_mask = np.float64; shape_mask = (msk.shape[0], msk.shape[1])
+            shared_mask, new_msk = create_shared_array(dtype_mask, shape_mask)
+            new_msk.flat[:] = msk[:, :]
+            
+            # compute the aperture photometry for each galaxy
+            # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
+            with closing(multiprocessing.Pool(n_processes, initializer=_init3, initargs=((shared_arr, dtype, shape), (shared_map, dtype_map, shape_map), (shared_mask, dtype_mask, shape_mask),))) as p:   
+                # Call parallel_function in parallel.
+                p.starmap(parallel_aperture_shared, zip(index_ranges, repeat(mp.wcs), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
+            # Close the processes.
+            p.join()
+            del new_mp, new_msk
+            """
             # For simplicity, make sure the total size is a multiple of the number of processes.
             n_processes = os.cpu_count()
             n = len(RA) // n_processes
@@ -282,7 +345,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
                 p.starmap(parallel_aperture, zip(index_ranges, repeat(mp.wcs), repeat(mp), repeat(msk), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
             # Close the processes.
             p.join()
-            
+            """
         # apply cuts because of masking
         choice = T_APs != 0.
         T_APs = T_APs[choice]
@@ -298,11 +361,13 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         # save apertures and indices
         np.save(delta_T_fn, delta_Ts)
         np.save(index_fn, index)
+    del mp, msk
+    gc.collect()
 
     # define bins in Mpc
     rbins = np.linspace(0., 150., 16) # Mpc
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
-    nthread = 8 # os.cpu_count()
+    nthread = 4 # os.cpu_count()
     is_log_bin = False
 
     # change dtype to speed up calculation
@@ -313,7 +378,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
     if want_error == "jackknife":
         # For simplicity, make sure the total size is a multiple of the number of processes.
-        n_processes = 50#os.cpu_count() # tuks
+        n_processes = 20#os.cpu_count() # tuks
         n = n_sample // n_processes
         index_ranges = []
         for k in range(n_processes-1):
@@ -350,7 +415,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_jack_err.npy", DD_err)
     elif want_error == "bootstrap":
         # For simplicity, make sure the total size is a multiple of the number of processes.
-        n_processes = 20 #os.cpu_count() 
+        n_processes = 10 #os.cpu_count() 
         n = n_sample // n_processes
         index_ranges = []
         for k in range(n_processes-1):
