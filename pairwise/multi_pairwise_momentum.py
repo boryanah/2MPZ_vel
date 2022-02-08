@@ -51,7 +51,7 @@ def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcm
     opos, stampMap, stampMask = extractStamp(mp, ra, dec, rApMaxArcmin=r_max_arcmin, resCutoutArcmin=resCutoutArcmin, projCutout=projCutout, pathTestFig='figs/', test=False, cmbMask=msk)
 
     # skip if mask is zero everywhere
-    if (np.sum(stampMask) == 0.) or (stampMask is None): T_AP = 0.
+    if (np.sum(stampMask) == 0.) or (stampMask is None): T_AP = 0.; return T_AP
         
     # record T_AP
     T_AP = calc_T_AP(stampMap, Theta_arcmin, mask=stampMask)
@@ -191,8 +191,8 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     
     # load CMB map and mask
     mp, msk = load_cmb_sample(cmb_sample, data_dir)
-
-    # map info
+    
+    # map info (used for cutting galaxies when using DR4)
     cmb_box = {}
     mp_box = np.rad2deg(mp.box())
     cmb_box['decfrom'] = mp_box[0, 0]
@@ -420,7 +420,7 @@ if __name__ == "__main__":
                                  "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all"])
     parser.add_argument('--cmb_sample', '-cmb', help='Which CMB sample do you want to use?',
                         default=DEFAULTS['cmb_sample'],
-                        choices=["ACT_BN", "ACT_D56"])
+                        choices=["ACT_BN", "ACT_D56", "ACT_DR5_f090", "ACT_DR5_f150"])
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--projCutout', help='Projection of the cutout', default=DEFAULTS['projCutout'])
     parser.add_argument('--want_error', '-error', help='Perform jackknife/bootstrap/none error computation of pairwise momentum', default=DEFAULTS['error_estimate'], choices=["none", "jackknife", "bootstrap"])

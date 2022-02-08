@@ -1,4 +1,5 @@
 import os
+import gc
 import time
 import argparse
 
@@ -40,14 +41,29 @@ def load_cmb_sample(cmb_sample, data_dir, save=False):
     elif cmb_sample == "ACT_D56":
         fn = data_dir+"/cmb_data/tilec_single_tile_D56_cmb_map_v1.2.0_joint.fits" # D56
         msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
+    elif cmb_sample == "ACT_DR5_f090":
+        fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f090_daynight_map.fits" # DR5 f090
+        msk_fn = None
+    elif cmb_sample == "ACT_DR5_f150":
+        fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f150_daynight_map.fits" # DR5 f150
+        msk_fn = None
 
     # reading fits file
     mp = enmap.read_fits(fn)
-    msk = enmap.read_fits(msk_fn)
-
+    if "DR5" in cmb_sample:
+        mp = mp[0] # three maps are available
+        gc.collect()
+    if msk_fn is None:
+        msk = mp*0.+1.
+        msk[mp == 0.] = 0.
+    else:
+        msk = enmap.read_fits(msk_fn)    
+    
     # save map
     if save:
         fig_name = (fn.split('/')[-1]).split('.fits')[0]
+        mp_box = np.rad2deg(mp.box())
+        print("decfrom, decto, rafrom, rato = ", mp_box[0, 0], mp_box[1, 0], mp_box[0, 1], mp_box[1, 1])
         eshow(mp, fig_name, **{"colorbar":True, "range": 300, "ticks": 5, "downgrade": 4})
         eshow(msk, fig_name+"_mask", **{"colorbar":True, "ticks": 5, "downgrade": 4})
         plt.close()
@@ -90,6 +106,8 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
         choice = (L_lo < L) & (L_hi >= L)
         if "ACT_BN" in cmb_sample or "ACT_D56" in cmb_sample:
             choice &= data['S16ILC'] == 1.
+        elif "ACT_DR5_f090" in cmb_sample or "ACT_DR5_f150" in cmb_sample:
+            choice &= data['S18coadd'] == 1.
         print("galaxies satisfying luminosty cut = ", np.sum(choice))
 
     # galaxy indices before applying any cuts
@@ -104,6 +122,9 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
         RA_choice = (RA <= cmb_box['rafrom']) | (RA > cmb_box['rato'])
     elif cmb_sample == 'ACT_BN':
         RA_choice = (RA <= cmb_box['rafrom']) & (RA > cmb_box['rato'])
+    else:
+        # DR5 has RA from -180 to 180, so cmb_box is not used
+        RA_choice = np.ones_like(DEC_choice)
     choice &= DEC_choice & RA_choice
     RA = RA[choice]
     DEC = DEC[choice]
