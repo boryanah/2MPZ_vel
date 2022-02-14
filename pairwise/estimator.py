@@ -1,4 +1,6 @@
+# Important note pairwise_velocity_sky and pairwise_momentum agree up to a sign and differ by ~2 in performance
 import numba
+numba.config.THREADING_LAYER = 'safe'
 import numpy as np
 
 
@@ -91,7 +93,7 @@ def pairwise_momentum(X, dT, bins, is_log_bin, dtype=np.float32, nthread=1):
                 p12 = ((hx1+hx2)*hx + (hy1+hy2)*hy + (hz1+hz2)*hz)*half
 
                 # record the sums for each pair
-                pair_count[t, ind] += one
+                pair_count[t, ind] += two #one
                 weight_count[t, ind] += (dT1-dT2) * p12
                 norm_weight_count[t, ind] += p12**two
 
@@ -99,7 +101,8 @@ def pairwise_momentum(X, dT, bins, is_log_bin, dtype=np.float32, nthread=1):
     pair_count = pair_count.sum(axis=0)
     weight_count = weight_count.sum(axis=0)
     norm_weight_count = norm_weight_count.sum(axis=0)
-
+    #if fbin == zero: pair_count[0] -= len(dT) # unnecessary because i < j
+    
     # obtain pairwise momentum
     for i in range(len(bins)-1):
         if norm_weight_count[i] != zero:
@@ -206,6 +209,7 @@ def pairwise_velocity_sky(X, V_los, Lbox, bins, is_log_bin, dtype=np.float32, nt
     pair_count = pair_count.sum(axis=0)
     weight_count = weight_count.sum(axis=0)
     norm_weight_count = norm_weight_count.sum(axis=0)
+    if fbin == zero: pair_count[0] -= len(V_los)
     
     for i in range(len(bins)-1):
         if norm_weight_count[i] != zero:
@@ -280,7 +284,7 @@ def pairwise_velocity_box(X, V_los, Lbox, bins, is_log_bin, dtype=np.float32, nt
             if dz <= -Lbox/two:
                 dz += Lbox
 
-            dist2 = dx**tow + dy**two + dz**two
+            dist2 = dx**two + dy**two + dz**two
             dist = np.sqrt(dist2)
 
             if is_log_bin:
@@ -302,6 +306,7 @@ def pairwise_velocity_box(X, V_los, Lbox, bins, is_log_bin, dtype=np.float32, nt
     pair_count = pair_count.sum(axis=0)
     weight_count = weight_count.sum(axis=0)
     norm_weight_count = norm_weight_count.sum(axis=0)
+    if fbin == zero: pair_count[0] -= len(V_los)
     
     for i in range(len(bins)-1):
         if norm_weight_count[i] != zero:

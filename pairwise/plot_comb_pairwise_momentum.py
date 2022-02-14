@@ -4,15 +4,46 @@ import matplotlib.pyplot as plt
 import plotparams
 plotparams.buba()
 
-galaxy_samples = ["2MPZ", "SDSS_L43", "SDSS_L61", "SDSS_L79"]
-cmb_sample1 = "ACT_D56"
-cmb_sample2 = "ACT_BN"
+#galaxy_mode = "2MPZ"
+galaxy_mode = "all"
 
-#error_type = "jack"
+cmb_mode = "DR4"
+#cmb_mode = "DR5"
+
+save_fn = f"figs/{galaxy_mode:s}_{cmb_mode:s}_pairwise.png"
+
+if galaxy_mode == "2MPZ":
+    galaxy_samples = ["2MPZ", "2MPZ", "2MPZ", "2MPZ"]
+    #Thetas1 = [7.74, 7.74, 4.89, 4.89] # 2mpz
+    #Thetas2 = [7.69, 7.69, 4.85, 4.85] # 2mpz
+    Thetas1 = [6., 7., 8., 9.] 
+    Thetas2 = [6., 7., 8., 9.] 
+elif galaxy_mode == "all":
+    galaxy_samples = ["2MPZ", "SDSS_L43", "SDSS_L61", "SDSS_L79"]
+    #Thetas1 = [5.83, 2.1, 2.1, 2.1] # bn
+    #Thetas2 = [5.83, 2.1, 2.1, 2.1] # bn
+    #Thetas1 = [5.86, 2.1, 2.1, 2.1] # d56
+    #Thetas2 = [5.86, 2.1, 2.1, 2.1] # d56
+    #Thetas1 = [5.75, 2.1, 2.1, 2.1] # dr5
+    #Thetas2 = [5.75, 2.1, 2.1, 2.1] # dr5
+    Thetas1 = [6., 2.1, 2.1, 2.1] 
+    Thetas2 = [6., 2.1, 2.1, 2.1]
+
+if cmb_mode == "DR4":
+    cmb_sample1 = "ACT_BN"
+    #cmb_sample1 = "ACT_D56"
+    cmb_sample2 = "ACT_BN"
+    #cmb_sample2 = "ACT_D56"
+elif cmb_mode == "DR5":
+    cmb_sample1 = "ACT_DR5_f090"
+    #cmb_sample1 = "ACT_DR5_f150"
+    cmb_sample2 = "ACT_DR5_f090"
+    #cmb_sample2 = "ACT_DR5_f150"
+
 error_types = ["boot", "boot", "boot", "boot"]
 vary_Thetas = [False, False, False, False]
-Thetas1 = [10.75, 2.1, 2.1, 2.1]
-Thetas2 = [10.68, 2.1, 2.1, 2.1]
+#vary_Thetas = [True, True, True, True]
+
 plot_corr = False
 
 rbinc = np.load(f"data/rbinc.npy")
@@ -75,7 +106,8 @@ for i in range(len(galaxy_samples)):
     plt.xlabel(r"$r \ [{\rm Mpc}]$")
     plt.ylim([-0.35, 0.35])
     plt.xlim([0., 150.])
-    plt.text(x=0.2, y=0.1, s=" ".join(galaxy_sample.split("_")), transform=plt.gca().transAxes)
+    text = " ".join(galaxy_sample.split("_"))+", ACT ("+cmb_sample1.split('_')[-1]+", "+cmb_sample2.split('_')[-1]+rf"), $\Theta$={Theta1:.1f}'"
+    plt.text(x=0.03, y=0.1, s=text, transform=plt.gca().transAxes)
 
-plt.savefig(f"figs/all_{error_type:s}_pairwise.png")
+plt.savefig(save_fn)
 plt.show()

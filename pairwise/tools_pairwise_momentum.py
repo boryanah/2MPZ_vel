@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
+import healpy as hp
 from pixell import enmap, enplot, utils
 from classy import Class
 from astropy.io import fits
@@ -37,16 +38,20 @@ def load_cmb_sample(cmb_sample, data_dir, save=False):
     # filename of CMB map
     if cmb_sample == "ACT_BN":
         fn = data_dir+"/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
-        msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_BN_compsep_mask.fits"
+        msk_fn = data_dir+"/cmb_data/comb_mask_ACT_BN_compsep_ps_8.0arcmin.fits"
+        #msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_BN_compsep_mask.fits"
     elif cmb_sample == "ACT_D56":
         fn = data_dir+"/cmb_data/tilec_single_tile_D56_cmb_map_v1.2.0_joint.fits" # D56
-        msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
+        msk_fn = data_dir+"/cmb_data/comb_mask_ACT_D56_compsep_ps_8.0arcmin.fits"
+        #msk_fn = data_dir+"/cmb_data/act_dr4.01_s14s15_D56_compsep_mask.fits"
     elif cmb_sample == "ACT_DR5_f090":
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f090_daynight_map.fits" # DR5 f090
-        msk_fn = None
+        msk_fn = data_dir+"/cmb_data/comb_mask_ACT_DR5_f090_ivar_65uK_ps_8.0arcmin.fits"
+        #msk_fn = None
     elif cmb_sample == "ACT_DR5_f150":
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f150_daynight_map.fits" # DR5 f150
-        msk_fn = None
+        msk_fn = data_dir+"/cmb_data/comb_mask_ACT_DR5_f150_ivar_65uK_ps_8.0arcmin.fits"
+        #msk_fn = None
 
     # reading fits file
     mp = enmap.read_fits(fn)
@@ -74,6 +79,7 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
         gal_fn = data_dir+"/2mpz_data/2MPZ.fits"
+        mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
     elif galaxy_sample == "BOSS_North":
         gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_North.fits"
     elif galaxy_sample == "BOSS_South":
@@ -90,6 +96,20 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
         #Z = hdul[1].data['ZSPEC'].flatten()
         K_rel = hdul[1].data['KCORR'].flatten() # might be unnecessary since 13.9 is the standard
         choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
+
+        # apply 2MPZ mask
+        B = hdul[1].data['B'].flatten() # -90, 90
+        L = hdul[1].data['L'].flatten() # 0, 360
+        B *= np.pi/180.
+        L *= np.pi/180.
+        x = np.cos(B)*np.cos(L)
+        y = np.cos(B)*np.sin(L)
+        z = np.sin(B)
+        mask = hp.read_map(mask_fn) # ring, not nested
+        npix = len(mask)
+        nside = hp.npix2nside(npix)
+        ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
+        choice &= mask[ipix] == 1.
     elif 'BOSS' in galaxy_sample:
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten() # 0, 360
@@ -131,7 +151,6 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
     Z = Z[choice]
     index = index[choice]
     print("number of galaxies = ", np.sum(choice))
-
     return RA, DEC, Z, index
 
 def get_sdss_lum_lims(galaxy_sample):

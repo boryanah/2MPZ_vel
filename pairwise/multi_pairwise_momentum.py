@@ -10,13 +10,16 @@ import time
 import argparse
 
 import numpy as np
+import numba
+numba.config.THREADING_LAYER = 'safe'
 import matplotlib.pyplot as plt
 
 from pixell import enmap, enplot, utils
 from classy import Class
 
-from util import extractStamp, calc_T_AP, eshow, get_tzav_fast
+from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, calc_T_MF
 from estimator import pairwise_momentum
+from numba_2pcf.cf import numba_pairwise_vel
 from tools_pairwise_momentum import get_P_D_A, load_cmb_sample, load_galaxy_sample, get_sdss_lum_lims
 
 from contextlib import closing
@@ -46,18 +49,22 @@ COSMO_DICT = {'h': h,
               #'sigma8': s8,
               'n_s': ns}
 
-def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcmin, projCutout):
-
+def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcmin, projCutout, matched_filter=None):
+    
     # extract stamp
     opos, stampMap, stampMask = extractStamp(mp, ra, dec, rApMaxArcmin=r_max_arcmin, resCutoutArcmin=resCutoutArcmin, projCutout=projCutout, pathTestFig='figs/', test=False, cmbMask=msk)
 
     # skip if mask is zero everywhere
     if (np.sum(stampMask) == 0.) or (stampMask is None): T_AP = 0.; return T_AP
-        
-    # record T_AP
-    T_AP = calc_T_AP(stampMap, Theta_arcmin, mask=stampMask)
 
-    return T_AP
+    if matched_filter is not None:
+        # record T_MF
+        dT = calc_T_MF(stampMap, fmap=matched_filter, mask=stampMask)
+    else:
+        # record T_AP
+        dT = calc_T_AP(stampMap, Theta_arcmin, mask=stampMask)
+        
+    return dT
 
 def jackknife_pairwise_momentum(P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_jack=1000):
 
@@ -71,7 +78,12 @@ def jackknife_pairwise_momentum(P, delta_Ts, rbins, is_log_bin, dtype, nthread, 
         # calculate the pairwise velocity
         t1 = time.time()
         new_inds = np.delete(inds, np.arange(n_jump*i, n_jump*(i+1)))
-        DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        P_new = P[new_inds]
+        delta_Ts_new = delta_Ts[new_inds]
+        #DD, PV = pairwise_momentum(P_new, delta_Ts_new, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        assert is_log_bin == False
+        assert rbins[0] == 0.
+        PV = numba_pairwise_vel(P_new, delta_Ts_new, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)['pairwise']
         print("jackknife sample took = ", i, time.time()-t1)
         PV_2D[:, i] = PV
         DD_2D[:, i] = DD
@@ -94,7 +106,12 @@ def bootstrap_pairwise_momentum(P, delta_Ts, rbins, is_log_bin, dtype, nthread, 
         # calculate the pairwise velocity
         t1 = time.time()
         new_inds = np.random.choice(inds, len(inds))
-        DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        P_new = P[new_inds]
+        delta_Ts_new = delta_Ts[new_inds]
+        #DD, PV = pairwise_momentum(P_new, delta_Ts_new, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        assert is_log_bin == False
+        assert rbins[0] == 0.
+        PV = numba_pairwise_vel(P_new, delta_Ts_new, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)['pairwise']
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_2D[:, i] = PV
         DD_2D[:, i] = DD
@@ -147,22 +164,7 @@ def shared_to_numpy3(shared_arr, dtype, shape, shared_map, dtype_map, shape_map,
     No copy is involved, the array reflects the underlying shared buffer."""
     return np.frombuffer(shared_arr, dtype=dtype).reshape(shape), np.frombuffer(shared_map, dtype=dtype_map).reshape(shape_map), np.frombuffer(shared_mask, dtype=dtype_mask).reshape(shape_mask)
 
-def parallel_aperture(index_range, wcs, mp, msk, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout):
-    """This function is called in parallel in the different processes. It takes an index range in
-    the shared array, and fills in some values there."""
-    i0, i1 = index_range
-    T_APs = shared_to_numpy(*shared_arr)
-    # WARNING: need to make sure that two processes do not write to the same part of the array.
-    # Here, this is the case because the ranges are not overlapping, and all processes receive
-    # a different range.
-    mp = enmap.ndmap(mp, wcs)
-    msk = enmap.ndmap(msk, wcs) # this is necessary since this operation sheds the ndmap coating
-
-    for i in range(i0, i1):
-        if i % 1000 == 0: print(i)
-        T_APs[i] = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
-
-def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout):
+def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout, matched_filter):
     """This function is called in parallel in the different processes. It takes an index range in
     the shared array, and fills in some values there."""
     i0, i1 = index_range
@@ -177,7 +179,7 @@ def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcm
     
     for i in range(i0, i1):
         if i % 1000 == 0: print(i)
-        T_APs[i] = compute_aperture(new_mp, new_msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
+        T_APs[i] = compute_aperture(new_mp, new_msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=matched_filter)
 
 
 def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_sample):
@@ -193,7 +195,12 @@ def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         # calculate the pairwise velocity
         t1 = time.time()
         new_inds = np.delete(inds, np.arange(n_jump*i, n_jump*(i+1)))
-        DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        P_new = P[new_inds]
+        delta_Ts_new = delta_Ts[new_inds]
+        #DD, PV = pairwise_momentum(P_new, delta_Ts_new, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        assert is_log_bin == False
+        assert rbins[0] == 0.
+        PV = numba_pairwise_vel(P_new, delta_Ts_new, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)['pairwise']
         print("jackknife sample took = ", i, time.time()-t1)
         PV_jack[:, i] = PV
 
@@ -209,13 +216,19 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         # calculate the pairwise velocity
         t1 = time.time()
         new_inds = np.random.choice(inds, len(inds))
-        DD, PV = pairwise_momentum(P[new_inds], delta_Ts[new_inds], rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        P_new = P[new_inds]
+        delta_Ts_new = delta_Ts[new_inds]
+        #DD_old, PV_old = pairwise_momentum(P_new, delta_Ts_new, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        assert is_log_bin == False
+        assert rbins[0] == 0.
+        PV = numba_pairwise_vel(P_new, delta_Ts_new, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)['pairwise']
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_boot[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False, not_parallel=False):
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False, want_MF=False, not_parallel=False):
     print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
     vary_str = "vary" if vary_Theta else "fixed"
+    MF_str = "MF" if want_MF else ""
     
     # load CMB map and mask
     mp, msk = load_cmb_sample(cmb_sample, data_dir)
@@ -273,8 +286,12 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     # convert to pixell coordinates
     RA[RA > 180.] -= 360.
 
-    delta_T_fn = f"data/{galaxy_sample:s}_{cmb_sample:s}_{vary_str:s}Th{Theta:.2f}_delta_Ts.npy"
-    index_fn = f"data/{galaxy_sample}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
+    if want_MF:
+        delta_T_fn = f"data/{galaxy_sample:s}_{cmb_sample:s}_{MF_str:s}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}_{cmb_sample}_{MF_str:s}_index.npy"
+    else:
+        delta_T_fn = f"data/{galaxy_sample:s}_{cmb_sample:s}_{vary_str:s}Th{Theta:.2f}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
     if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
         delta_Ts = np.load(delta_T_fn)
         index_new = np.load(index_fn)
@@ -282,15 +299,23 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         Z = Z[choice]
         P = P[choice]
     else:
+        if want_MF:
+            size_stamp = 15. # arcmin (total length is np.ceil(size_stamp*2*np.sqrt(2)))
+            theta_arcmin[:] = size_stamp # all cutouts should be that big
+            stamp = cutoutGeometry(projCutout=projCutout, rApMaxArcmin=size_stamp, resCutoutArcmin=resCutoutArcmin)
+            modlmap = stamp.modlmap() 
+            fmap = gaussian_filter(modlmap)
+        else:
+            fmap = None
+
         if not_parallel:
-            # non-parallelized version
+            # non-parallelized version                
             T_APs = np.zeros(len(RA))
             for i in range(len(RA)):
                 if i % 1000 == 0: print("i = ", i)
-                T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout)
+                T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=fmap)
                 T_APs[i] = T_AP
         else:
-
             # For simplicity, make sure the total size is a multiple of the number of processes.
             n_processes = os.cpu_count()
             n = len(RA) // n_processes
@@ -319,33 +344,11 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
             with closing(multiprocessing.Pool(n_processes, initializer=_init3, initargs=((shared_arr, dtype, shape), (shared_map, dtype_map, shape_map), (shared_mask, dtype_mask, shape_mask),))) as p:   
                 # Call parallel_function in parallel.
-                p.starmap(parallel_aperture_shared, zip(index_ranges, repeat(mp.wcs), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
+                p.starmap(parallel_aperture_shared, zip(index_ranges, repeat(mp.wcs), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout), repeat(fmap)))
             # Close the processes.
             p.join()
             del new_mp, new_msk
-            """
-            # For simplicity, make sure the total size is a multiple of the number of processes.
-            n_processes = os.cpu_count()
-            n = len(RA) // n_processes
-            index_ranges = []
-            for k in range(n_processes-1):
-                index_ranges.append((k * n, (k + 1) * n))
-            index_ranges.append(((k + 1) * n, len(RA)))
-            index_ranges = np.array(index_ranges)
 
-            # Initialize a shared array.
-            dtype = np.float64; shape = (len(RA),)
-            shared_arr, T_APs = create_shared_array(dtype, shape)
-            T_APs.flat[:] = np.zeros(len(RA))
-
-            # compute the aperture photometry for each galaxy
-            # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
-            with closing(multiprocessing.Pool(n_processes, initializer=_init, initargs=((shared_arr, dtype, shape),))) as p:   
-                # Call parallel_function in parallel.
-                p.starmap(parallel_aperture, zip(index_ranges, repeat(mp.wcs), repeat(mp), repeat(msk), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout)))
-            # Close the processes.
-            p.join()
-            """
         # apply cuts because of masking
         choice = T_APs != 0.
         T_APs = T_APs[choice]
@@ -363,11 +366,12 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         np.save(index_fn, index)
     del mp, msk
     gc.collect()
-
+    print("number of galaxies (after masking) = ", len(delta_Ts))
+    
     # define bins in Mpc
     rbins = np.linspace(0., 150., 16) # Mpc
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
-    nthread = 4 # os.cpu_count()
+    nthread = os.cpu_count()//4
     is_log_bin = False
 
     # change dtype to speed up calculation
@@ -378,7 +382,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
     if want_error == "jackknife":
         # For simplicity, make sure the total size is a multiple of the number of processes.
-        n_processes = 20#os.cpu_count() # tuks
+        n_processes = 25 #os.cpu_count() 
         n = n_sample // n_processes
         index_ranges = []
         for k in range(n_processes-1):
@@ -407,12 +411,11 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         #PV_jack, PV_mean, PV_err = jackknife_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
 
         # save arrays
-        np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack.npy", PV_jack)
+        if want_MF:
+            np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{MF_str:s}_PV_jack.npy", PV_jack)
+        else:
+            np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack.npy", PV_jack)
         np.save(f"data/rbinc.npy", rbinc)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack_mean.npy", PV_mean)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack_err.npy", PV_err)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_jack_mean.npy", DD_mean)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_jack_err.npy", DD_err)
     elif want_error == "bootstrap":
         # For simplicity, make sure the total size is a multiple of the number of processes.
         n_processes = 10 #os.cpu_count() 
@@ -438,28 +441,33 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             p.starmap(parallel_bootstrap_pairwise, zip(index_ranges, repeat(inds), repeat(P), repeat(delta_Ts), repeat(rbins), repeat(is_log_bin), repeat(dtype), repeat(nthread)))
         # Close the processes.
         p.join()
-
         
         # compute bootstraps
         #PV_boot, PV_mean, PV_err = bootstrap_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
 
         # save arrays
-        np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot.npy", PV_boot)
+        if want_MF:
+            np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot.npy", PV_boot)
+        else:
+            np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{MF_str:s}_PV_boot.npy", PV_boot)
         np.save(f"data/rbinc.npy", rbinc)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot_mean.npy", PV_mean)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot_err.npy", PV_err)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_boot_mean.npy", DD_mean)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD_boot_err.npy", DD_err)
     else:
         # calculate the pairwise velocity
+        #DD_old, PV_old = pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        
         t = time.time()
-        DD, PV = pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        assert is_log_bin == False
+        assert rbins[0] == 0.
+        table = numba_pairwise_vel(P, delta_Ts, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)
+        DD = table['npairs']
+        PV = table['pairwise']
         print("calculation took = ", time.time()-t)
-
         # save arrays
-        np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
+        if want_MF:
+            np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{MF_str:s}_PV.npy", PV)
+        else:
+            np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
         np.save(f"data/rbinc.npy", rbinc)
-        #np.save(f"data/{galaxy_sample:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_DD.npy", DD)
 
     # plot pairwise velocity
     if want_plot:
@@ -494,6 +502,7 @@ if __name__ == "__main__":
     parser.add_argument('--vary_Theta', '-vary', help='Vary the aperture radius', action='store_true')
     parser.add_argument('--data_dir', help='Directory where the data is stored', default=DEFAULTS['data_dir'])
     parser.add_argument('--want_plot', '-plot', help='Plot the final pairwise momentum function', action='store_true')
+    parser.add_argument('--want_MF', '-MF', help='Want to use matched filter', action='store_true')
     parser.add_argument('--not_parallel', help='Do serial computation of aperture rather than parallel', action='store_true')
     args = vars(parser.parse_args())
 
