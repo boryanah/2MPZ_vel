@@ -11,6 +11,8 @@ from pixell import enmap, enplot, utils
 from classy import Class
 from astropy.io import fits
 from astropy.io import ascii
+from astropy import units as u
+from astropy.coordinates import SkyCoord
 
 from util import eshow
 
@@ -74,7 +76,7 @@ def load_cmb_sample(cmb_sample, data_dir, save=False):
         plt.close()
     return mp, msk
 
-def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
+def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random):
 
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
@@ -91,17 +93,42 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
     if galaxy_sample == '2MPZ':
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten()/utils.degree # 0, 360
-        DEC = hdul[1].data['DEC'].flatten()/utils.degree # -180, 180
+        DEC = hdul[1].data['DEC'].flatten()/utils.degree # -90, 90
+        print("DEC min/max", DEC.min(), DEC.max())
         Z = hdul[1].data['ZPHOTO'].flatten()
         #Z = hdul[1].data['ZSPEC'].flatten()
         K_rel = hdul[1].data['KCORR'].flatten() # might be unnecessary since 13.9 is the standard
-        choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
-
-        # apply 2MPZ mask
         B = hdul[1].data['B'].flatten() # -90, 90
         L = hdul[1].data['L'].flatten() # 0, 360
-        B *= np.pi/180.
-        L *= np.pi/180.
+        if want_random != -1:
+            np.random.seed(want_random)
+            factor = 8
+            N_rand = len(RA)*factor
+            Z = np.repeat(Z, factor)
+            K_rel = np.repeat(K_rel, factor)
+            RA = np.repeat(RA, factor)
+            DEC = np.repeat(DEC, factor)
+            inds_ra = np.arange(len(RA), dtype=int)
+            inds_dec = np.arange(len(RA), dtype=int)
+            np.random.shuffle(inds_ra)
+            np.random.shuffle(inds_dec)
+            RA = RA[inds_ra]
+            DEC = DEC[inds_dec]
+            c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
+            B = c_icrs.galactic.b.value
+            L = c_icrs.galactic.l.value
+            
+            #costheta = np.random.rand(N_rand)*2.-1.
+            #theta = np.arccos(costheta)
+            #DEC *= 180./np.pi # 0, 180
+            #DEC -= 90.
+            #RA = np.random.rand(N_rand)*360.
+
+        choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
+        
+        # apply 2MPZ mask
+        B *= utils.degree
+        L *= utils.degree
         x = np.cos(B)*np.cos(L)
         y = np.cos(B)*np.sin(L)
         z = np.sin(B)
@@ -113,7 +140,7 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box):
     elif 'BOSS' in galaxy_sample:
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten() # 0, 360
-        DEC = hdul[1].data['DEC'].flatten() # -180, 180 # -10, 36
+        DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 36
         Z = hdul[1].data['Z'].flatten()
         choice = np.ones(len(Z), dtype=bool)
     elif 'SDSS' in galaxy_sample:

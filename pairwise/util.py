@@ -188,8 +188,8 @@ def calc_T_MF(imap, fmap=None, mask=None, test=False):
     binned_power = savgol_filter(binned_power, 21, 3)
     power_map = interpolate.interp1d(centers, binned_power, bounds_error=False, fill_value=0)(modlmap)
     power_map = power_map.flatten()
-    #inv_C_power = np.diag(1./power_map**2.)
-    inv_C_power = (1./power_map**2.)
+    #inv_C_power = np.diag(1./power_map)
+    inv_C_power = (1./power_map)
     inv_C_power = np.nan_to_num(inv_C_power)
     
     if test:
