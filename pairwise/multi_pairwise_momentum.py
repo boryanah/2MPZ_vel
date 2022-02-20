@@ -225,10 +225,11 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_boot[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, not_parallel=False):
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False):
     print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
     vary_str = "vary" if vary_Theta else "fixed"
     MF_str = "MF" if want_MF else ""
+    mask_str = "_premask" if want_premask else ""
     if want_random != -1:
         print("Requested using random galaxy positions, forcing 2MPZ-like sample")
         galaxy_sample = "2MPZ"
@@ -292,12 +293,34 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     # convert to pixell coordinates
     RA[RA > 180.] -= 360.
 
+    # apply cmb mask before computing temperature decrements
+    if want_premask:
+        coords = np.deg2rad(np.array((DEC, RA)))
+        ypix, xpix = enmap.sky2pix(msk.shape, msk.wcs, coords)
+        print(xpix.min(), xpix.max(), msk.shape[1])
+        print(ypix.min(), ypix.max(), msk.shape[0])
+        xpix, ypix = xpix.astype(int), ypix.astype(int)
+        premask = np.zeros(len(RA), dtype=bool)
+        inside = (xpix >= 0) & (ypix >= 0) & (xpix < msk.shape[1]) & (ypix < msk.shape[0])
+        print("inside percentage = ", np.sum(inside)*100./len(inside))
+        xpix[~inside] = 0; ypix[~inside]= 0; # it is ok to be conservative near edge
+        premask[msk[ypix, xpix] == 1.] = True
+        premask[~inside] = False
+        index = index[premask]
+        RA = RA[premask]
+        DEC = DEC[premask]
+        P = P[premask]
+        Z = Z[premask]
+        msk = msk*0. + 1. # from now on, no more masking
+        print("number of galaxies (after premasking) = ", len(RA))
+        del premask, xpix, ypix, inside
+    
     if want_MF:
-        delta_T_fn = f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample:s}_{MF_str:s}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{rand_str:s}_{cmb_sample}_{MF_str:s}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample:s}_{MF_str:s}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_index.npy"
     else:
-        delta_T_fn = f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample:s}_{vary_str:s}Th{Theta:.2f}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample:s}_{vary_str:s}Th{Theta:.2f}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
     if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
         delta_Ts = np.load(delta_T_fn)
         index_new = np.load(index_fn)
@@ -418,11 +441,25 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV_jack.npy", PV_jack)
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV_jack.npy", PV_jack)
         else:
-            np.save(f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack.npy", PV_jack)
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack.npy", PV_jack)
         np.save(f"data/rbinc.npy", rbinc)
     elif want_error == "bootstrap":
+        t = time.time()
+        assert is_log_bin == False
+        assert rbins[0] == 0.
+        table = numba_pairwise_vel(P, delta_Ts, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)
+        print("first calculation took = ", time.time()-t)
+        DD = table['npairs']
+        PV = table['pairwise']
+        # save arrays
+        if want_MF:
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV.npy", PV)
+        else:
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
+
+        
         # For simplicity, make sure the total size is a multiple of the number of processes.
         n_processes = 10 #os.cpu_count() 
         n = n_sample // n_processes
@@ -453,9 +490,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV_boot.npy", PV_boot)
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV_boot.npy", PV_boot)
         else:
-            np.save(f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot.npy", PV_boot)
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot.npy", PV_boot)
         np.save(f"data/rbinc.npy", rbinc)
     else:
         # calculate the pairwise velocity
@@ -470,9 +507,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         print("calculation took = ", time.time()-t)
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV.npy", PV)
         else:
-            np.save(f"data/{galaxy_sample:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
         np.save(f"data/rbinc.npy", rbinc)
 
     # plot pairwise velocity
@@ -510,6 +547,7 @@ if __name__ == "__main__":
     parser.add_argument('--want_plot', '-plot', help='Plot the final pairwise momentum function', action='store_true')
     parser.add_argument('--want_MF', '-MF', help='Want to use matched filter', action='store_true')
     parser.add_argument('--want_random', '-rand', help='Random seed to shuffle galaxy positions (-1 does not randomize)', type=int, default=-1)
+    parser.add_argument('--want_premask', '-mask', help='Mask galaxies with CMB mask before taking temperature decrements', action='store_true')
     parser.add_argument('--not_parallel', help='Do serial computation of aperture rather than parallel', action='store_true')
     args = vars(parser.parse_args())
 
