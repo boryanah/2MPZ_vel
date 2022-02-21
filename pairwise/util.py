@@ -6,6 +6,7 @@ from scipy import stats
 from scipy.signal import savgol_filter
 
 from pixell import enmap, reproject, enplot, curvedsky, utils
+from pixell import powspec
 
 import rotfuncs
 
@@ -145,11 +146,45 @@ def calc_T_AP(imap, rad_arcmin, test=False, mask=None):
     flux_diff = flux_inner-flux_outer
     return flux_diff
 
+
+def compute_power(imap, modlmap=None, apod_pix=20, mask=None, test=False):
+    if modlmap is None:
+        # fourier magnitude mode map
+        modlmap = imap.modlmap()
+    
+    # apodize and take fft
+    taper = enmap.apod(imap*0+1, apod_pix) # I pass in an array of ones the same shape,wcs as imap
+    if mask is not None:
+        taper *= mask
+    w2 = np.mean(taper**2.)
+    kmap = enmap.fft(imap*taper, normalize="phys")
+
+    # compute power in the map, bin, 
+    power = np.real(kmap * np.conj(kmap))
+    bin_edges = np.arange(0, 6000, 40)
+    centers = (bin_edges[1:] + bin_edges[:-1])/2.
+    binned_power = bin(power, modlmap, bin_edges)/w2
+
+    if test:
+        camb_theory = powspec.read_spectrum("camb_data/camb_theory.dat", scale=True) # scaled by 2pi/l/(l+1) to get C_ell
+        cltt = camb_theory[0, 0, :3000]
+        ls = np.arange(cltt.size)
+    
+        plt.plot(ls, cltt*ls*(ls+1)/(np.pi*2.), lw=3, color='k') # D_ell = C_ell l (l+1)/2pi (muK^2)
+        plt.plot(centers, binned_power*centers*(centers+1.)/(np.pi*2.), marker="o", ls="none")
+        plt.yscale('log')
+        plt.xlabel('$\\ell$')
+        plt.ylabel('$D_{\\ell}$')
+        plt.show()
+
+    return binned_power, centers
+
 # This is a simple binning function that finds the mean in annular bins defined by bin_edges
 def bin(data, modlmap, bin_edges):
     digitized = np.digitize(modlmap.flatten(), bin_edges, right=True)
     n_modes_bin = np.bincount(digitized)[1:-1]
-    power_bin = np.bincount(digitized, data.reshape(-1))[1:-1]
+    assert digitized.shape == (data.flatten()).shape, "Shape mismatch"
+    power_bin = np.bincount(digitized, data.flatten())[1:-1]
     power = power_bin / n_modes_bin
     power = np.nan_to_num(power)
     return power
@@ -160,7 +195,7 @@ def gaussian_filter(modlmap, ell_0=4500, ell_sigma=500):
     filt_map = interpolate.interp1d(ells, filt, bounds_error=False, fill_value=0)(modlmap)
     return filt_map
 
-def calc_T_MF(imap, fmap=None, mask=None, test=False):
+def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False):
     # what do with mask??
     # what tf is the output a
     # what do with filter
@@ -173,53 +208,35 @@ def calc_T_MF(imap, fmap=None, mask=None, test=False):
     # get filter
     if fmap is None:
         fmap = gaussian_filter(modlmap)
-    
-    # apodize and take fft
-    apod_pix = 20 # number of pixels at the edge to apodize
-    taper = enmap.apod(imap*0+1, apod_pix) # I pass in an array of ones the same shape,wcs as imap
-    w2 = np.mean(taper**2.)
-    kmap = enmap.fft(imap*taper, normalize="phys")
 
-    # compute power in the map, bin, smooth with savitsky and expand back to 2d
-    power = np.real(kmap * np.conj(kmap))
-    bin_edges = np.arange(0, 6000, 40)
-    centers = (bin_edges[1:] + bin_edges[:-1])/2.
-    binned_power = bin(power, modlmap, bin_edges)/w2
-    binned_power = savgol_filter(binned_power, 21, 3)
+    if power is None:
+        # smooth with savitsky and expand back to 2d
+        binned_power, centers = compute_power(imap, modlmap=modlmap)
+        binned_power = savgol_filter(binned_power, 21, 3)
+    else:
+        binned_power, centers = power[:, 1], power[:, 0]
     power_map = interpolate.interp1d(centers, binned_power, bounds_error=False, fill_value=0)(modlmap)
     power_map = power_map.flatten()
     #inv_C_power = np.diag(1./power_map)
     inv_C_power = (1./power_map)
     inv_C_power = np.nan_to_num(inv_C_power)
     
-    if test:
-        from pixell import powspec
-        camb_theory = powspec.read_spectrum("camb_data/camb_theory.dat", scale=True) # scaled by 2pi/l/(l+1) to get C_ell
-        cltt = camb_theory[0, 0, :3000]
-        ls = np.arange(cltt.size)
-    
-        plt.plot(ls, cltt*ls*(ls+1)/(np.pi*2.), lw=3, color='k') # D_ell = C_ell l (l+1)/2pi (muK^2)
-        plt.plot(centers, binned_power*centers*(centers+1.)/(np.pi*2.), marker="o", ls="none")
-        plt.yscale('log')
-        plt.xlabel('$\\ell$')
-        plt.ylabel('$D_{\\ell}$')
-        plt.show()
-        
+    if test:        
         kfiltered = kmap * fmap
         filtered = enmap.ifft(kfiltered, normalize="phys").real
         eshow(filtered, "filtered")
         plt.close()
         eshow(imap, "unfiltered")
         plt.close()
-        eshow(imap*taper, "tapered")
-        plt.close()
+        #eshow(imap*taper, "tapered")
+        #plt.close()
 
     # compute quantity of interest
     fmap = fmap.flatten()
     kmap = kmap.flatten()
     #a = np.dot(fmap, np.dot(inv_C_power, kmap))
-    a = np.sum(fmap*inv_C_power*kmap)
     #a /= np.dot(fmap, np.dot(inv_C_power, fmap))
+    a = np.sum(fmap*inv_C_power*kmap)
     norm = np.sum(fmap*inv_C_power*fmap)
     norm = np.nan_to_num(norm)
     a /= norm

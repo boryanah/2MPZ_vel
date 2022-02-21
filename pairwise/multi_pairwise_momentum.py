@@ -34,6 +34,7 @@ DEFAULTS['galaxy_sample'] = "SDSS_L79"
 DEFAULTS['cmb_sample'] = "ACT_BN"
 DEFAULTS['error_estimate'] = "none"
 DEFAULTS['n_sample'] = 100
+DEFAULTS['mask_type'] = 'mtype0'
 DEFAULTS['data_dir'] = "/mnt/marvin1/boryanah/2MPZ_vel/"
 
 # cosmological parameters
@@ -49,7 +50,7 @@ COSMO_DICT = {'h': h,
               #'sigma8': s8,
               'n_s': ns}
 
-def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcmin, projCutout, matched_filter=None):
+def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcmin, projCutout, matched_filter=None, power=None):
     
     # extract stamp
     opos, stampMap, stampMask = extractStamp(mp, ra, dec, rApMaxArcmin=r_max_arcmin, resCutoutArcmin=resCutoutArcmin, projCutout=projCutout, pathTestFig='figs/', test=False, cmbMask=msk)
@@ -59,7 +60,7 @@ def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcm
 
     if matched_filter is not None:
         # record T_MF
-        dT = calc_T_MF(stampMap, fmap=matched_filter, mask=stampMask)
+        dT = calc_T_MF(stampMap, fmap=matched_filter, mask=stampMask, power=power)
     else:
         # record T_AP
         dT = calc_T_AP(stampMap, Theta_arcmin, mask=stampMask)
@@ -164,7 +165,7 @@ def shared_to_numpy3(shared_arr, dtype, shape, shared_map, dtype_map, shape_map,
     No copy is involved, the array reflects the underlying shared buffer."""
     return np.frombuffer(shared_arr, dtype=dtype).reshape(shape), np.frombuffer(shared_map, dtype=dtype_map).reshape(shape_map), np.frombuffer(shared_mask, dtype=dtype_mask).reshape(shape_mask)
 
-def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout, matched_filter):
+def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcmin, resCutoutArcmin, projCutout, matched_filter, power):
     """This function is called in parallel in the different processes. It takes an index range in
     the shared array, and fills in some values there."""
     i0, i1 = index_range
@@ -179,7 +180,7 @@ def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcm
     
     for i in range(i0, i1):
         if i % 1000 == 0: print(i)
-        T_APs[i] = compute_aperture(new_mp, new_msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=matched_filter)
+        T_APs[i] = compute_aperture(new_mp, new_msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=matched_filter, power=power)
 
 
 def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_sample):
@@ -225,11 +226,19 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_boot[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False):
-    print(f"Producing: {galaxy_sample:s}_{cmb_sample:s}")
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, mask_type, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False):
+    print(f"Producing: {galaxy_sample}_{cmb_sample}")
     vary_str = "vary" if vary_Theta else "fixed"
     MF_str = "MF" if want_MF else ""
     mask_str = "_premask" if want_premask else ""
+    if mask_type == 'mtype0' or '': mask_type = ''; source_arcmin = 8.; noise_uK = 65.
+    else:
+        if mask_type == 'mtype1': source_arcmin = 10.; noise_uK = 65
+        elif mask_type == 'mtype2': source_arcmin = 35.; noise_uK = 65
+        elif mask_type == 'mtype3': source_arcmin = 8.; noise_uK = 45
+        elif mask_type == 'mtype4': source_arcmin = 10.; noise_uK = 45
+        elif mask_type == 'mtype5': source_arcmin = 35.; noise_uK = 45
+        mask_type = f'_{mask_type}'
     if want_random != -1:
         print("Requested using random galaxy positions, forcing 2MPZ-like sample")
         galaxy_sample = "2MPZ"
@@ -238,7 +247,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         rand_str = ""
     
     # load CMB map and mask
-    mp, msk = load_cmb_sample(cmb_sample, data_dir)
+    mp, msk = load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK)
     
     # map info (used for cutting galaxies when using DR4)
     cmb_box = {}
@@ -316,11 +325,15 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         del premask, xpix, ypix, inside
     
     if want_MF:
-        delta_T_fn = f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample:s}_{MF_str:s}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_index.npy"
+        binned_power = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_binned_power.npy")
+        centers = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_centers.npy")
+        power = np.vstack((centers, binned_power)).T
     else:
-        delta_T_fn = f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample:s}_{vary_str:s}Th{Theta:.2f}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
+        power = None
     if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
         delta_Ts = np.load(delta_T_fn)
         index_new = np.load(index_fn)
@@ -342,7 +355,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             T_APs = np.zeros(len(RA))
             for i in range(len(RA)):
                 if i % 1000 == 0: print("i = ", i)
-                T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=fmap)
+                T_AP = compute_aperture(mp, msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=fmap, power=power)
                 T_APs[i] = T_AP
         else:
             # For simplicity, make sure the total size is a multiple of the number of processes.
@@ -373,7 +386,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             # Create a Pool of processes and expose the shared array to the processes, in a global variable (_init() function)
             with closing(multiprocessing.Pool(n_processes, initializer=_init3, initargs=((shared_arr, dtype, shape), (shared_map, dtype_map, shape_map), (shared_mask, dtype_mask, shape_mask),))) as p:   
                 # Call parallel_function in parallel.
-                p.starmap(parallel_aperture_shared, zip(index_ranges, repeat(mp.wcs), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout), repeat(fmap)))
+                p.starmap(parallel_aperture_shared, zip(index_ranges, repeat(mp.wcs), repeat(RA), repeat(DEC), repeat(theta_arcmin), repeat(rApMaxArcmin), repeat(resCutoutArcmin), repeat(projCutout), repeat(fmap), repeat(power)))
             # Close the processes.
             p.join()
             del new_mp, new_msk
@@ -441,9 +454,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV_jack.npy", PV_jack)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV_jack.npy", PV_jack)
         else:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_jack.npy", PV_jack)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV_jack.npy", PV_jack)
         np.save(f"data/rbinc.npy", rbinc)
     elif want_error == "bootstrap":
         t = time.time()
@@ -455,9 +468,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         PV = table['pairwise']
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV.npy", PV)
         else:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
 
         
         # For simplicity, make sure the total size is a multiple of the number of processes.
@@ -490,9 +503,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV_boot.npy", PV_boot)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV_boot.npy", PV_boot)
         else:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV_boot.npy", PV_boot)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV_boot.npy", PV_boot)
         np.save(f"data/rbinc.npy", rbinc)
     else:
         # calculate the pairwise velocity
@@ -507,9 +520,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         print("calculation took = ", time.time()-t)
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{MF_str:s}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV.npy", PV)
         else:
-            np.save(f"data/{galaxy_sample:s}{mask_str:s}{rand_str:s}_{cmb_sample}_{vary_str:s}Th{Theta:.2f}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
         np.save(f"data/rbinc.npy", rbinc)
 
     # plot pairwise velocity
@@ -548,6 +561,7 @@ if __name__ == "__main__":
     parser.add_argument('--want_MF', '-MF', help='Want to use matched filter', action='store_true')
     parser.add_argument('--want_random', '-rand', help='Random seed to shuffle galaxy positions (-1 does not randomize)', type=int, default=-1)
     parser.add_argument('--want_premask', '-mask', help='Mask galaxies with CMB mask before taking temperature decrements', action='store_true')
+    parser.add_argument('--mask_type', '-mtype', help='Type of CMB mask to apply', choices=['', 'mtype0', 'mtype1', 'mtype2', 'mtype3', 'mtype4', 'mtype5'], default=DEFAULTS['mask_type'])
     parser.add_argument('--not_parallel', help='Do serial computation of aperture rather than parallel', action='store_true')
     args = vars(parser.parse_args())
 
