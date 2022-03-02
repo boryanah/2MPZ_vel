@@ -4,6 +4,7 @@ import numba
 from scipy import interpolate
 from scipy import stats
 from scipy.signal import savgol_filter
+from scipy.fft import fft, fftfreq
 
 from pixell import enmap, reproject, enplot, curvedsky, utils
 from pixell import powspec
@@ -189,13 +190,25 @@ def bin(data, modlmap, bin_edges):
     power = np.nan_to_num(power)
     return power
 
-def gaussian_filter(modlmap, ell_0=4500, ell_sigma=500):
+def gaussian_filter(modlmap, ell_0=1800, ell_sigma=500):
+    # corresponds to 180./ell_0*60. arcmin
     ells = np.arange(0, 20000, 1)
     filt = np.exp(-(ells-ell_0)**2./2./ell_sigma**2.)
     filt_map = interpolate.interp1d(ells, filt, bounds_error=False, fill_value=0)(modlmap)
     return filt_map
 
-def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False):
+def tophat_filter(modrmap, rad_arcmin):
+    emap = modrmap*0
+    # TESTING ask stuff about fourier transforming factors (with fft)
+    radius = rad_arcmin*utils.arcmin
+    inner = modrmap < radius
+    outer = (modrmap >= radius) & (modrmap < np.sqrt(2.)*radius)
+    emap[inner] = 1.
+    emap[outer] = -1.
+    filt_map = enmap.fft(emap, normalize='phys')
+    return filt_map
+
+def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False, apod_pix=20):
     # what do with mask??
     # what tf is the output a
     # what do with filter
@@ -205,21 +218,32 @@ def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False):
     # fourier magnitude mode map
     modlmap = imap.modlmap()
 
+    # TESTING
+    # apodize and take fft
+    taper = enmap.apod(imap*0+1, apod_pix) # I pass in an array of ones the same shape,wcs as imap
+    kmap = enmap.fft(imap*taper, normalize="phys")
+
     # get filter
     if fmap is None:
+        print("hopefully never")
         fmap = gaussian_filter(modlmap)
 
     if power is None:
+        print("hopefully never2")
         # smooth with savitsky and expand back to 2d
         binned_power, centers = compute_power(imap, modlmap=modlmap)
         binned_power = savgol_filter(binned_power, 21, 3)
     else:
         binned_power, centers = power[:, 1], power[:, 0]
+    """
     power_map = interpolate.interp1d(centers, binned_power, bounds_error=False, fill_value=0)(modlmap)
     power_map = power_map.flatten()
     #inv_C_power = np.diag(1./power_map)
     inv_C_power = (1./power_map)
     inv_C_power = np.nan_to_num(inv_C_power)
+    """
+    # TESTING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    inv_C_power = np.ones_like(modlmap.flatten())
     
     if test:        
         kfiltered = kmap * fmap

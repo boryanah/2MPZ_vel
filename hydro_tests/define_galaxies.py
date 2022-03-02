@@ -10,7 +10,7 @@ data_dir = "/mnt/alan1/boryanah/MTNG/data_fp/"; pos_unit = 1.; Lbox = 500. # cMp
 snapshot = 264; z = 0.
 #snapshot = 214; z = 0.5
 #snapshot = 237; z = 0.245
-#snapshot = 99
+#snapshot = 99; z = 0.
 if snapshot == 99:
     snap_str = ""
 else:    
@@ -29,11 +29,25 @@ SubhalosSFR = SubhaloSFR/SubhaloMstar
 SubhalosSFR[SubhaloMstar == 0.] = 0.
 
 # load halo fields
+"""
 Group_M_TopHat200 = np.load(f"{data_dir:s}/Group_M_TopHat200_{fp_dm:s}{snap_str:s}.npy")*1.e10
 Group_R_TopHat200 = np.load(f"{data_dir:s}/Group_R_TopHat200_{fp_dm:s}{snap_str:s}.npy")/pos_unit # comoving Mpc/h
+print(np.median(Group_M_TopHat200), "top")
+print(np.median(Group_R_TopHat200))
+"""
+Group_M_TopHat200 = np.load(f"{data_dir:s}/Group_M_Mean200_{fp_dm:s}{snap_str:s}.npy")*1.e10
+Group_R_TopHat200 = np.load(f"{data_dir:s}/Group_R_Mean200_{fp_dm:s}{snap_str:s}.npy")/pos_unit # comoving Mpc/h
+print(np.median(Group_M_TopHat200), "mean")
+print(np.median(Group_R_TopHat200))
+"""
+Group_M_TopHat200 = np.load(f"{data_dir:s}/Group_M_Crit200_{fp_dm:s}{snap_str:s}.npy")*1.e10
+Group_R_TopHat200 = np.load(f"{data_dir:s}/Group_R_Crit200_{fp_dm:s}{snap_str:s}.npy")/pos_unit # comoving Mpc/h
+print(np.median(Group_M_TopHat200), "crit")
+print(np.median(Group_R_TopHat200))
+"""
 
 # how many galaxies
-ngal = 1.e-4 # gal/(Mpc/h)^3
+ngal = 0.02 # gal/(Mpc/h)^3
 Ngal = int(ngal*Lbox**3)
 print("number of galaxies = ", Ngal)
 print("number density of galaxies = ", ngal)
@@ -61,6 +75,7 @@ par_r200 /= h #cMpc
 print("redshift = ", z )
 print("median and mean r200 [cMpc] = ", np.median(par_r200), np.mean(par_r200)) # 0.068, 0.082
 print("median and mean r200 [Mpc] = ", np.median(par_r200)*1./(1+z), np.mean(par_r200)*1./(1+z)) 
+quit()
 rbins = np.geomspace(0.01, par_r200.max(), 51)
 rbinc = (rbins[1:] + rbins[:-1]) * .5
 hist, _ = np.histogram(par_r200, bins=rbins)
@@ -79,6 +94,11 @@ par_hist_cent, _ = np.histogram(par_mass_cent, bins=mbins)
 halo_hist, _ = np.histogram(Group_M_TopHat200, bins=mbins)
 hod_hist = par_hist/halo_hist
 hod_hist_cent = par_hist_cent/halo_hist
+hod_hist_sats = hod_hist - hod_hist_cent
+np.save("data/hod_cent.npy", hod_hist_cent)
+np.save("data/hod_sats.npy", hod_hist_sats)
+np.save("data/mbinc.npy", mbinc)
+np.save("data/mbins.npy", mbins)
 
 plt.figure(1, figsize=(9, 7))
 plt.plot(mbinc, hod_hist, color="dodgerblue", ls='-', label="Total")

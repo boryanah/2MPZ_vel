@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import healpy as hp
-from pixell import enmap, enplot, utils
+from pixell import enmap, enplot, utils, reproject
 from classy import Class
 from astropy.io import fits
 from astropy.io import ascii
@@ -36,7 +36,7 @@ def get_P_D_A(Cosmo, RA, DEC, Z):
     P = P*CD[:, None]
     return P, D_A
 
-def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
+def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=True):
     # filename of CMB map
     if cmb_sample == "ACT_BN":
         fn = data_dir+"/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
@@ -54,17 +54,44 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f150_daynight_map.fits" # DR5 f150
         msk_fn = data_dir+f"/cmb_data/comb_mask_ACT_DR5_f150_ivar_{noise_uK:d}uK_ps_{source_arcmin:.1f}arcmin.fits"
         #msk_fn = None
-
+    elif cmb_sample == "Planck":
+        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits"
+        #fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits"
+        msk_fn = data_dir+f"/cmb_data/ps_mask_Planck_{source_arcmin:.1f}arcmin.fits"
+        #msk_fn = None
+        
+    """
+    # generate Planck map
+    res_arcmin = 1.#0.5
+    DEC_center, RA_center = 0., 0.
+    nx = int(180./(res_arcmin/60.)) # DEC
+    ny = int(360./(res_arcmin/60.)) # RA
+    #nx = int(10./(res_arcmin/60.)) # DEC
+    #ny = int(30./(res_arcmin/60.)) # RA
+    print("nx, ny = ", nx, ny)
+    shape, wcs = enmap.geometry(shape=(nx, ny), res=res_arcmin*utils.arcmin, pos=(DEC_center, RA_center))
+    mp = reproject.enmap_from_healpix(fn, shape, wcs, ncomp=1, unit=1, lmax=6000, rot="gal,equ")
+    mp *= 1.e6 # units of uK
+    mp = mp.astype(np.float32)
+    print("pshape, pwcs = ", mp.shape, mp.wcs)
+    print("box = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
+    print("pbox = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
+    enmap.write_fits(data_dir+f"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits", mp)
+    """
     # reading fits file
     mp = enmap.read_fits(fn)
+
     if "DR5" in cmb_sample:
         mp = mp[0] # three maps are available
         gc.collect()
+    elif "Planck" in cmb_sample:
+        mp = mp[0] # saved as (1, 10800, 21600)
     if msk_fn is None:
         msk = mp*0.+1.
         msk[mp == 0.] = 0.
     else:
-        msk = enmap.read_fits(msk_fn)    
+        msk = enmap.read_fits(msk_fn)
+    print("msk == 0", np.sum(msk == 0.))
     
     # save map
     if save:
@@ -74,13 +101,14 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         eshow(mp, fig_name, **{"colorbar":True, "range": 300, "ticks": 5, "downgrade": 4})
         eshow(msk, fig_name+"_mask", **{"colorbar":True, "ticks": 5, "downgrade": 4})
         plt.close()
+    quit()
     return mp, msk
 
 def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random):
 
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
-        gal_fn = data_dir+"/2mpz_data/2MPZ.fits"
+        gal_fn = data_dir+"/2mpz_data/2MPZ_FULL_wspec_coma_complete.fits"#2MPZ.fits
         mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
     elif galaxy_sample == "BOSS_North":
         gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_North.fits"
@@ -95,17 +123,34 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
         RA = hdul[1].data['RA'].flatten()/utils.degree # 0, 360
         DEC = hdul[1].data['DEC'].flatten()/utils.degree # -90, 90
         print("DEC min/max", DEC.min(), DEC.max())
-        Z = hdul[1].data['ZPHOTO'].flatten()
-        #Z = hdul[1].data['ZSPEC'].flatten()
+        ZPHOTO = hdul[1].data['ZPHOTO'].flatten()
+        ZSPEC = hdul[1].data['ZSPEC'].flatten()
+        """
+        plt.figure(figsize=(9, 7))
+        plt.plot([ZPHOTO.min(), ZPHOTO.max()], [ZPHOTO.min(), ZPHOTO.max()], ls='--', lw=3, color='black')
+        plt.scatter(ZSPEC[ZSPEC > 0.], ZPHOTO[ZSPEC > 0.], marker='x', color='red', s=5)
+        plt.show()
+        """
+        mode = "ZPHOTO"
+        #mode = "ZSPEC" # complete for K < 11.65
+        #mode = "ZMIX"
+        if mode == "ZPHOTO":
+            Z = ZPHOTO.copy()
+        elif mode == "ZSPEC":
+            Z = ZSPEC.copy()
+        elif mode == "ZMIX":
+            Z = ZPHOTO.copy()
+            Z[ZSPEC > 0.] = ZSPEC[ZSPEC > 0.]
         K_rel = hdul[1].data['KCORR'].flatten() # might be unnecessary since 13.9 is the standard
         B = hdul[1].data['B'].flatten() # -90, 90
         L = hdul[1].data['L'].flatten() # 0, 360
         if want_random != -1:
             np.random.seed(want_random)
-            factor = 8
+            factor = 3
             N_rand = len(RA)*factor
             Z = np.repeat(Z, factor)
             K_rel = np.repeat(K_rel, factor)
+            """
             RA = np.repeat(RA, factor)
             DEC = np.repeat(DEC, factor)
             inds_ra = np.arange(len(RA), dtype=int)
@@ -114,17 +159,19 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
             np.random.shuffle(inds_dec)
             RA = RA[inds_ra]
             DEC = DEC[inds_dec]
+            """
+            costheta = np.random.rand(N_rand)*2.-1.
+            theta = np.arccos(costheta)
+            DEC = theta*(180./np.pi) # 0, 180
+            DEC -= 90.
+            RA = np.random.rand(N_rand)*360.
+            print("RA/DEC range", RA.min(), RA.max(), DEC.min(), DEC.max())
             c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
             B = c_icrs.galactic.b.value
             L = c_icrs.galactic.l.value
             
-            #costheta = np.random.rand(N_rand)*2.-1.
-            #theta = np.arccos(costheta)
-            #DEC *= 180./np.pi # 0, 180
-            #DEC -= 90.
-            #RA = np.random.rand(N_rand)*360.
-
-        choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
+        #choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
+        choice = (K_rel < 13.8) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
         
         # apply 2MPZ mask
         B *= utils.degree
@@ -178,6 +225,7 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
     Z = Z[choice]
     index = index[choice]
     print("number of galaxies = ", np.sum(choice))
+
     return RA, DEC, Z, index
 
 def get_sdss_lum_lims(galaxy_sample):

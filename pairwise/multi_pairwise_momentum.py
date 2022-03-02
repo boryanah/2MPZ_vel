@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from pixell import enmap, enplot, utils
 from classy import Class
 
-from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, calc_T_MF
+from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, tophat_filter, calc_T_MF
 from estimator import pairwise_momentum
 from numba_2pcf.cf import numba_pairwise_vel
 from tools_pairwise_momentum import get_P_D_A, load_cmb_sample, load_galaxy_sample, get_sdss_lum_lims
@@ -64,7 +64,7 @@ def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcm
     else:
         # record T_AP
         dT = calc_T_AP(stampMap, Theta_arcmin, mask=stampMask)
-        
+
     return dT
 
 def jackknife_pairwise_momentum(P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_jack=1000):
@@ -231,7 +231,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     vary_str = "vary" if vary_Theta else "fixed"
     MF_str = "MF" if want_MF else ""
     mask_str = "_premask" if want_premask else ""
-    if mask_type == 'mtype0' or '': mask_type = ''; source_arcmin = 8.; noise_uK = 65.
+    if mask_type == 'mtype0' or '': mask_type = ''; source_arcmin = 8.; noise_uK = 65
     else:
         if mask_type == 'mtype1': source_arcmin = 10.; noise_uK = 65
         elif mask_type == 'mtype2': source_arcmin = 35.; noise_uK = 65
@@ -274,7 +274,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     if "SDSS" in galaxy_sample:
         goal_size = 1.1 # Mpc (comoving)
     elif "2MPZ" in galaxy_sample:
-        goal_size = 0.6 # Mpc (comoving) 0.5 or 0.6 or 0.792 see target.py in hydro_tests/
+        goal_size = 0.5 # Mpc (comoving) 0.5 or 0.6 or 0.792 see target.py in hydro_tests/
     goal_size *= 1./(1+zmed) # Mpc (proper)
     sigma_z = 0.01
     print("median redshift = ", zmed)
@@ -327,8 +327,12 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     if want_MF:
         delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_delta_Ts.npy"
         index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_index.npy"
-        binned_power = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_binned_power.npy")
-        centers = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_centers.npy")
+        if "DR5" in cmb_sample:
+            binned_power = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_binned_power.npy")
+            centers = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_centers.npy")
+        else:
+            binned_power = np.load(f"camb_data/{cmb_sample}_binned_power.npy")
+            centers = np.load(f"camb_data/{cmb_sample}_centers.npy")
         power = np.vstack((centers, binned_power)).T
     else:
         delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
@@ -342,11 +346,16 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         P = P[choice]
     else:
         if want_MF:
-            size_stamp = 15. # arcmin (total length is np.ceil(size_stamp*2*np.sqrt(2)))
-            theta_arcmin[:] = size_stamp # all cutouts should be that big
-            stamp = cutoutGeometry(projCutout=projCutout, rApMaxArcmin=size_stamp, resCutoutArcmin=resCutoutArcmin)
-            modlmap = stamp.modlmap() 
-            fmap = gaussian_filter(modlmap)
+            #size_stamp = 15. # arcmin (total length is np.ceil(size_stamp*2*np.sqrt(2)))
+            #theta_arcmin[:] = size_stamp # all cutouts should be that big
+            assert vary_Theta == False, "stamps must be same sized" 
+            assert np.isclose(np.mean(theta_arcmin), np.max(theta_arcmin)), "stamps must be same sized"
+            assert np.isclose(np.mean(theta_arcmin), np.min(theta_arcmin)), "stamps must be same sized"
+            stamp = cutoutGeometry(projCutout=projCutout, rApMaxArcmin=np.mean(theta_arcmin), resCutoutArcmin=resCutoutArcmin)
+            modlmap = stamp.modlmap()
+            modrmap = stamp.modrmap()
+            #fmap = gaussian_filter(modlmap)
+            fmap = tophat_filter(modrmap, np.mean(theta_arcmin))
         else:
             fmap = None
 
@@ -549,7 +558,7 @@ if __name__ == "__main__":
                                  "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all"])
     parser.add_argument('--cmb_sample', '-cmb', help='Which CMB sample do you want to use?',
                         default=DEFAULTS['cmb_sample'],
-                        choices=["ACT_BN", "ACT_D56", "ACT_DR5_f090", "ACT_DR5_f150"])
+                        choices=["ACT_BN", "ACT_D56", "ACT_DR5_f090", "ACT_DR5_f150", "Planck"])
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--projCutout', help='Projection of the cutout', default=DEFAULTS['projCutout'])
     parser.add_argument('--want_error', '-error', help='Perform jackknife/bootstrap/none error computation of pairwise momentum', default=DEFAULTS['error_estimate'], choices=["none", "jackknife", "bootstrap"])

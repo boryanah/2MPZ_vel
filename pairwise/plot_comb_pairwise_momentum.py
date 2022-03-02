@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -5,44 +7,70 @@ import plotparams
 plotparams.buba()
 
 #galaxy_mode = "2MPZ"
-galaxy_mode = "all"
+#galaxy_mode = "2MPZ_rand"
+galaxy_mode = "2MPZ_premask"
+#galaxy_mode = "all"
 
-cmb_mode = "DR4"
+if galaxy_mode == "2MPZ_premask":
+    Th = float(sys.argv[1])
+
+#cmb_mode = "DR4"
 #cmb_mode = "DR5"
-
-save_fn = f"figs/{galaxy_mode:s}_{cmb_mode:s}_pairwise.png"
+cmb_mode = "all"
 
 if galaxy_mode == "2MPZ":
     galaxy_samples = ["2MPZ", "2MPZ", "2MPZ", "2MPZ"]
     #Thetas1 = [7.74, 7.74, 4.89, 4.89] # 2mpz
     #Thetas2 = [7.69, 7.69, 4.85, 4.85] # 2mpz
     Thetas1 = [6., 7., 8., 9.] 
-    Thetas2 = [6., 7., 8., 9.] 
+    Thetas2 = [6., 7., 8., 9.]
+    mask_str = " mask0"
+elif galaxy_mode == "2MPZ_rand": # 100 looks good
+    galaxy_samples = ["2MPZ_rand200", "2MPZ_rand201", "2MPZ_rand202", "2MPZ_rand300"]#203, 300
+    #Thetas1 = [7.74, 7.74, 4.89, 4.89] # 2mpz
+    #Thetas2 = [7.69, 7.69, 4.85, 4.85] # 2mpz
+    Thetas1 = [6., 6., 6., 6.] 
+    Thetas2 = [6., 6., 6., 6.]
+    mask_str = " mask0"
+elif galaxy_mode == "2MPZ_premask": # 100 looks good
+    galaxy_samples = ["2MPZ_premask", "2MPZ_premask", "2MPZ_premask", "2MPZ_premask"]
+    #galaxy_samples = ["2MPZ_mtype2_premask", "2MPZ_mtype2_premask", "2MPZ_mtype2_premask", "2MPZ_mtype2_premask"]
+    #galaxy_samples = ["2MPZ_mtype5_premask", "2MPZ_mtype5_premask", "2MPZ_mtype5_premask", "2MPZ_mtype5_premask"]
+    if galaxy_samples[0] == "2MPZ_premask":
+        mask_str = " mask0"
+    else:
+        mask_str = f" mask{galaxy_samples[0].split('_')[1].split('mtype')[1]}"
+    Thetas1 = [Th, Th, Th, Th]
+    Thetas2 = [Th, Th, Th, Th] # 5, 6, 7, 8, 9
+
 elif galaxy_mode == "all":
     galaxy_samples = ["2MPZ", "SDSS_L43", "SDSS_L61", "SDSS_L79"]
-    #Thetas1 = [5.83, 2.1, 2.1, 2.1] # bn
-    #Thetas2 = [5.83, 2.1, 2.1, 2.1] # bn
-    #Thetas1 = [5.86, 2.1, 2.1, 2.1] # d56
-    #Thetas2 = [5.86, 2.1, 2.1, 2.1] # d56
-    #Thetas1 = [5.75, 2.1, 2.1, 2.1] # dr5
-    #Thetas2 = [5.75, 2.1, 2.1, 2.1] # dr5
     Thetas1 = [6., 2.1, 2.1, 2.1] 
     Thetas2 = [6., 2.1, 2.1, 2.1]
-
+    mask_str = " mask0"
+    
 if cmb_mode == "DR4":
     cmb_sample1 = "ACT_BN"
     #cmb_sample1 = "ACT_D56"
     cmb_sample2 = "ACT_BN"
     #cmb_sample2 = "ACT_D56"
 elif cmb_mode == "DR5":
-    cmb_sample1 = "ACT_DR5_f090"
-    #cmb_sample1 = "ACT_DR5_f150"
-    cmb_sample2 = "ACT_DR5_f090"
-    #cmb_sample2 = "ACT_DR5_f150"
-
+    #cmb_sample1 = "ACT_DR5_f090"
+    cmb_sample1 = "ACT_DR5_f150"
+    #cmb_sample2 = "ACT_DR5_f090"
+    cmb_sample2 = "ACT_DR5_f150"
+elif cmb_mode == "all":
+    cmb_samples1 = ["ACT_D56", "ACT_BN", "ACT_DR5_f090", "ACT_DR5_f150"]
+    cmb_samples2 = ["ACT_D56", "ACT_BN", "ACT_DR5_f090", "ACT_DR5_f150"]
+    
 error_types = ["boot", "boot", "boot", "boot"]
 vary_Thetas = [False, False, False, False]
 #vary_Thetas = [True, True, True, True]
+
+if galaxy_mode == "2MPZ_premask":
+    save_fn = f"figs/{galaxy_samples[0]:s}_{cmb_mode:s}_Th{Thetas1[0]:.2f}_pairwise.png"
+else:
+    save_fn = f"figs/{galaxy_mode:s}_{cmb_mode:s}_pairwise.png"
 
 plot_corr = False
 
@@ -56,12 +84,25 @@ for i in range(len(galaxy_samples)):
     vary_Theta = vary_Thetas[i]
     Theta1 = Thetas1[i]
     Theta2 = Thetas2[i]
-    
+    if cmb_mode == "all":
+        cmb_sample1 = cmb_samples1[i]
+        cmb_sample2 = cmb_samples2[i]
+
+        
     vary_str = "vary" if vary_Theta else "fixed"
     
     PV_2D1 = np.load(f"data/{galaxy_sample:s}_{cmb_sample1}_{vary_str:s}Th{Theta1:.2f}_PV_{error_type:s}.npy")
     PV_2D2 = np.load(f"data/{galaxy_sample:s}_{cmb_sample2}_{vary_str:s}Th{Theta2:.2f}_PV_{error_type:s}.npy")
+    PV_mean1 = np.load(f"data/{galaxy_sample:s}_{cmb_sample1}_{vary_str:s}Th{Theta1:.2f}_PV.npy")
+    PV_mean2 = np.load(f"data/{galaxy_sample:s}_{cmb_sample2}_{vary_str:s}Th{Theta2:.2f}_PV.npy")
     assert PV_2D1.shape == PV_2D2.shape # assumption is we've chosen the same number of samples for both
+    try:
+        PV_rand1 = np.load(f"data/{galaxy_sample:s}_rand10_{cmb_sample1}_{vary_str:s}Th{Theta1:.2f}_PV.npy")
+        PV_rand2 = np.load(f"data/{galaxy_sample:s}_rand10_{cmb_sample2}_{vary_str:s}Th{Theta2:.2f}_PV.npy")
+    except:
+        PV_rand1 = np.zeros_like(PV_mean1)
+        PV_rand2 = np.zeros_like(PV_mean2)
+
     if plot_corr:
         PV_corr1 = np.corrcoef(PV_2D1)
         PV_corr2 = np.corrcoef(PV_2D2)
@@ -81,8 +122,8 @@ for i in range(len(galaxy_samples)):
     elif error_type == 'boot':
         PV_cov1 = np.cov(PV_2D1)
         PV_cov2 = np.cov(PV_2D2)
-    PV_mean1 = np.mean(PV_2D1, axis=1)
-    PV_mean2 = np.mean(PV_2D2, axis=1)
+    #PV_mean1 = np.mean(PV_2D1, axis=1)
+    #PV_mean2 = np.mean(PV_2D2, axis=1)
     if error_type == 'jack':
         PV_err1 = np.std(PV_2D1, axis=1)*np.sqrt(n_sample-1.)
         PV_err2 = np.std(PV_2D2, axis=1)*np.sqrt(n_sample-1.)
@@ -91,23 +132,37 @@ for i in range(len(galaxy_samples)):
         PV_err2 = np.std(PV_2D2, axis=1)
     PV_std1 = np.sqrt(np.diag(PV_cov1))
     PV_std2 = np.sqrt(np.diag(PV_cov2))
-    print("std vs err 1 = ", (PV_err1-PV_std1)*100./PV_err1)
-    print("std vs err 2 = ", (PV_err2-PV_std2)*100./PV_err2)
-    
+    #print("std vs err 1 = ", (PV_err1-PV_std1)*100./PV_err1)
+    #print("std vs err 2 = ", (PV_err2-PV_std2)*100./PV_err2)
+
+    choice = rbinc < 50.
+    print(f"data/{galaxy_sample:s}_{cmb_sample1}_{vary_str:s}Th{Theta1:.2f}_PV")
+    print("dof = ", np.sum(choice))
+    PV_cov1_red = np.cov(PV_2D1[choice, :])
+    PV_cov2_red = np.cov(PV_2D2[choice, :])
+    print("chi2 = ", np.dot(PV_mean1[choice], np.dot(np.linalg.inv(PV_cov1_red), PV_mean1[choice])))
+    print("chi2_rand = ", np.dot(PV_rand1[choice], np.dot(np.linalg.inv(PV_cov1_red), PV_rand1[choice])))
+    #print("chi2_1 = ", np.dot(PV_mean1[choice], np.dot(np.linalg.inv(PV_cov1_red), PV_mean1[choice])))
+    #print("chi2_2 = ", np.dot(PV_mean2[choice], np.dot(np.linalg.inv(PV_cov2_red), PV_mean2[choice])))
+    print("cond number = ", np.linalg.cond(PV_cov1_red))#, np.linalg.cond(PV_cov2_red))
+    print("------------------------------------------------")
     inv_Err2 = 1./PV_err1**2 + 1./PV_err2**2
-    PV_mean = (PV_mean1/PV_err1**2 + PV_mean2/PV_err2**2)/inv_Err2 
+    PV_mean = (PV_mean1/PV_err1**2 + PV_mean2/PV_err2**2)/inv_Err2
+    PV_rand = (PV_rand1/PV_err1**2 + PV_rand2/PV_err2**2)/inv_Err2  # kinda made up
     PV_err = np.sqrt(1./inv_Err2)
     
     plt.subplot(2, 2, i+1)
     plt.plot(rbinc, np.zeros(len(PV_mean)), 'k--')
-    plt.errorbar(rbinc, PV_mean, yerr=PV_err, capsize=4.)
+    plt.errorbar(rbinc, PV_rand, ls='--', color='dodgerblue', capsize=4.)
+    plt.errorbar(rbinc, PV_mean, yerr=PV_err, color='dodgerblue', capsize=4.)
     
     plt.ylabel(r"$\hat p_{kSZ}(r) \ [\mu {\rm K}]$")
     plt.xlabel(r"$r \ [{\rm Mpc}]$")
     plt.ylim([-0.35, 0.35])
     plt.xlim([0., 150.])
-    text = " ".join(galaxy_sample.split("_"))+", ACT ("+cmb_sample1.split('_')[-1]+", "+cmb_sample2.split('_')[-1]+rf"), $\Theta$={Theta1:.1f}'"
+    text = (" ".join(galaxy_sample.split("_"))).split(" premask")[0].split(" mtype")[0]+mask_str+", ACT ("+cmb_sample1.split('_')[-1]+", "+cmb_sample2.split('_')[-1]+rf"), $\Theta$={Theta1:.1f}'"
     plt.text(x=0.03, y=0.1, s=text, transform=plt.gca().transAxes)
 
 plt.savefig(save_fn)
-plt.show()
+plt.close()
+#plt.show()
