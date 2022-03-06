@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 
 from pixell import enmap, enplot, utils
 from classy import Class
+import healpy as hp
+from astropy.coordinates import SkyCoord
+from astropy import units as u
 
 from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, tophat_filter, calc_T_MF
 from estimator import pairwise_momentum
@@ -57,7 +60,7 @@ def compute_aperture(mp, msk, ra, dec, Theta_arcmin, r_max_arcmin, resCutoutArcm
 
     # skip if mask is zero everywhere
     if (np.sum(stampMask) == 0.) or (stampMask is None): T_AP = 0.; return T_AP
-
+    
     if matched_filter is not None:
         # record T_MF
         dT = calc_T_MF(stampMap, fmap=matched_filter, mask=stampMask, power=power)
@@ -245,85 +248,59 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         rand_str = f"_rand{want_random:d}"
     else:
         rand_str = ""
-    
-    # load CMB map and mask
-    mp, msk = load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK)
-    
-    # map info (used for cutting galaxies when using DR4)
-    cmb_box = {}
-    mp_box = np.rad2deg(mp.box())
-    cmb_box['decfrom'] = mp_box[0, 0]
-    cmb_box['decto'] = mp_box[1, 0]
-    cmb_box['rafrom'] = mp_box[0, 1] % 360.
-    cmb_box['rato'] = mp_box[1, 1] % 360.
-    print("cmb bounds = ", cmb_box.items())
 
-    # load galaxies
-    RA, DEC, Z, index = load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random)
 
     # create instance of the class "Class"
     Cosmo = Class()
     Cosmo.set(COSMO_DICT)
     Cosmo.compute()
+
+    if "healpix" in cmb_sample:
+        cmb_box = {'decfrom': -90., 'decto': 90., 'rafrom': 0., 'rato': 360.}
+        
+    else:
+        # load CMB map and mask
+        mp, msk = load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK)
+    
+        # map info (used for cutting galaxies when using DR4)
+        cmb_box = {}
+        mp_box = np.rad2deg(mp.box())
+        cmb_box['decfrom'] = mp_box[0, 0]
+        cmb_box['decto'] = mp_box[1, 0]
+        cmb_box['rafrom'] = mp_box[0, 1] % 360.
+        cmb_box['rato'] = mp_box[1, 1] % 360.
+        print("cmb bounds = ", cmb_box.items())
+
+    # load galaxies
+    RA, DEC, Z, index = load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random)
     
     # get cartesian coordinates and angular size distance
     P, D_A = get_P_D_A(Cosmo, RA, DEC, Z)
+        
+    if "healpix" in cmb_sample and want_premask:
+        # load mask
+        msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_Gal70.fits"
+        msk = hp.read_map(msk_fn, verbose=True)
+        
+        # transform coords
+        c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs')
+        B = c_icrs.galactic.b.value # -90, 90
+        L = c_icrs.galactic.l.value # 0, 360
+        vec = hp.ang2vec(theta=L, phi=B, lonlat=True)
+        print("number before premasking = ", len(RA))
+        
+        # apply premasking 
+        npix = len(msk)
+        nside = hp.npix2nside(npix)
+        ipix = hp.pixelfunc.vec2pix(nside, *vec.T)
+        choice = msk[ipix] == 1.
+        index = index[choice]
+        RA = RA[choice]
+        DEC = DEC[choice]
+        Z = Z[choice]
+        P = P[choice]
+        print("number after premasking = ", len(RA))
 
-    # size of the clusters and median redshift
-    zmed = np.median(Z)
-    if "SDSS" in galaxy_sample:
-        goal_size = 1.1 # Mpc (comoving)
-    elif "2MPZ" in galaxy_sample:
-        goal_size = 0.5 # Mpc (comoving) 0.5 or 0.6 or 0.792 see target.py in hydro_tests/
-    goal_size *= 1./(1+zmed) # Mpc (proper)
-    sigma_z = 0.01
-    print("median redshift = ", zmed)
-
-    # compute angular size distance at median redshift
-    D_A_zmed = Cosmo.luminosity_distance(zmed)/(1.+zmed)**2 # Mpc (see note on units in tools)
-    theta_arcmin_zmed = (goal_size/D_A_zmed) / utils.arcmin
-    #theta_arcmin_zmed = (0.5*goal_size/D_A_zmed) / utils.arcmin 
-    print("theta_arcmin_zmed = ", theta_arcmin_zmed)
-
-    # scale aperture radius with redshift
-    if Theta is None:
-        Theta = theta_arcmin_zmed
-    if vary_Theta:
-        theta_arcmin = Theta*(D_A/D_A_zmed)
-    else:
-        theta_arcmin = Theta*np.ones(len(D_A))
-    print("aperture radius min/max = ", theta_arcmin.min(), theta_arcmin.max())
-    
-    # size of the stamps divided by two
-    #rApMaxArcmin = np.ceil(theta_arcmin*np.sqrt(2.)) # since sqrt2 is the max radius
-    rApMaxArcmin = theta_arcmin # in util.py multiplied by sqrt2 * 2 and ceil for size of canvas
-    print("max radius of outer flux ceiled = ", rApMaxArcmin.min(), rApMaxArcmin.max())
-
-    # convert to pixell coordinates
-    RA[RA > 180.] -= 360.
-
-    # apply cmb mask before computing temperature decrements
-    if want_premask:
-        coords = np.deg2rad(np.array((DEC, RA)))
-        ypix, xpix = enmap.sky2pix(msk.shape, msk.wcs, coords)
-        print(xpix.min(), xpix.max(), msk.shape[1])
-        print(ypix.min(), ypix.max(), msk.shape[0])
-        xpix, ypix = xpix.astype(int), ypix.astype(int)
-        premask = np.zeros(len(RA), dtype=bool)
-        inside = (xpix >= 0) & (ypix >= 0) & (xpix < msk.shape[1]) & (ypix < msk.shape[0])
-        print("inside percentage = ", np.sum(inside)*100./len(inside))
-        xpix[~inside] = 0; ypix[~inside]= 0; # it is ok to be conservative near edge
-        premask[msk[ypix, xpix] == 1.] = True
-        premask[~inside] = False
-        index = index[premask]
-        RA = RA[premask]
-        DEC = DEC[premask]
-        P = P[premask]
-        Z = Z[premask]
-        msk = msk*0. + 1. # from now on, no more masking
-        print("number of galaxies (after premasking) = ", len(RA))
-        del premask, xpix, ypix, inside
-    
     if want_MF:
         delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_delta_Ts.npy"
         index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_index.npy"
@@ -338,6 +315,8 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
         index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
         power = None
+
+    # if files don't exist, need to compute
     if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
         delta_Ts = np.load(delta_T_fn)
         index_new = np.load(index_fn)
@@ -345,6 +324,61 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         Z = Z[choice]
         P = P[choice]
     else:
+        # size of the clusters and median redshift
+        zmed = np.median(Z)
+        if "SDSS" in galaxy_sample or "BOSS" in galaxy_sample:
+            goal_size = 1.1 # Mpc (comoving)
+        elif "2MPZ" in galaxy_sample:
+            goal_size = 0.5 # Mpc (comoving) 0.5 or 0.6 or 0.792 see target.py in hydro_tests/
+        goal_size *= 1./(1+zmed) # Mpc (proper)
+        sigma_z = 0.01
+        print("median redshift = ", zmed)
+
+        # compute angular size distance at median redshift
+        D_A_zmed = Cosmo.luminosity_distance(zmed)/(1.+zmed)**2 # Mpc (see note on units in tools)
+        theta_arcmin_zmed = (goal_size/D_A_zmed) / utils.arcmin
+        #theta_arcmin_zmed = (0.5*goal_size/D_A_zmed) / utils.arcmin 
+        print("theta_arcmin_zmed = ", theta_arcmin_zmed)
+
+        # scale aperture radius with redshift
+        if Theta is None:
+            Theta = theta_arcmin_zmed
+        if vary_Theta:
+            theta_arcmin = Theta*(D_A/D_A_zmed)
+        else:
+            theta_arcmin = Theta*np.ones(len(D_A))
+        print("aperture radius min/max = ", theta_arcmin.min(), theta_arcmin.max())
+
+        # size of the stamps divided by two
+        rApMaxArcmin = theta_arcmin # in util.py multiplied by sqrt2 * 2 and ceil for size of canvas
+        print("max radius of outer flux ceiled = ", rApMaxArcmin.min(), rApMaxArcmin.max())
+
+        # convert to pixell coordinates
+        RA[RA > 180.] -= 360.
+
+        # apply cmb mask before computing temperature decrements
+        if want_premask:
+            coords = np.deg2rad(np.array((DEC, RA)))
+            ypix, xpix = enmap.sky2pix(msk.shape, msk.wcs, coords)
+            print(xpix.min(), xpix.max(), msk.shape[1])
+            print(ypix.min(), ypix.max(), msk.shape[0])
+            xpix, ypix = xpix.astype(int), ypix.astype(int)
+            premask = np.zeros(len(RA), dtype=bool)
+            inside = (xpix >= 0) & (ypix >= 0) & (xpix < msk.shape[1]) & (ypix < msk.shape[0])
+            print("inside percentage = ", np.sum(inside)*100./len(inside))
+            xpix[~inside] = 0; ypix[~inside]= 0; # it is ok to be conservative near edge
+            premask[msk[ypix, xpix] == 1.] = True
+            premask[~inside] = False
+            index = index[premask]
+            RA = RA[premask]
+            DEC = DEC[premask]
+            P = P[premask]
+            Z = Z[premask]
+            #msk = msk*0. + 1. # from now on, no more masking # TESTING
+            print("number of galaxies (after premasking) = ", len(RA))
+            del premask, xpix, ypix, inside
+    
+        # matched filter or not
         if want_MF:
             #size_stamp = 15. # arcmin (total length is np.ceil(size_stamp*2*np.sqrt(2)))
             #theta_arcmin[:] = size_stamp # all cutouts should be that big
@@ -359,6 +393,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         else:
             fmap = None
 
+        # parallel computation or not
         if not_parallel:
             # non-parallelized version                
             T_APs = np.zeros(len(RA))
@@ -415,8 +450,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         # save apertures and indices
         np.save(delta_T_fn, delta_Ts)
         np.save(index_fn, index)
-    del mp, msk
-    gc.collect()
+
+        del mp, msk
+        gc.collect()
     print("number of galaxies (after masking) = ", len(delta_Ts))
     
     # define bins in Mpc
@@ -424,13 +460,13 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
     nthread = os.cpu_count()//4
     is_log_bin = False
-
+    
     # change dtype to speed up calculation
     dtype = np.float32
     P = P.astype(dtype)
     delta_Ts = delta_Ts.astype(dtype)
     assert P.shape[0] == len(delta_Ts)
-
+    
     if want_error == "jackknife":
         # For simplicity, make sure the total size is a multiple of the number of processes.
         n_processes = 25 #os.cpu_count() 
@@ -555,10 +591,10 @@ if __name__ == "__main__":
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
                         choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D",
-                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all"])
+                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC"])
     parser.add_argument('--cmb_sample', '-cmb', help='Which CMB sample do you want to use?',
                         default=DEFAULTS['cmb_sample'],
-                        choices=["ACT_BN", "ACT_D56", "ACT_DR5_f090", "ACT_DR5_f150", "Planck"])
+                        choices=["ACT_BN", "ACT_D56", "ACT_DR5_f090", "ACT_DR5_f150", "Planck", "Planck_healpix"])
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--projCutout', help='Projection of the cutout', default=DEFAULTS['projCutout'])
     parser.add_argument('--want_error', '-error', help='Perform jackknife/bootstrap/none error computation of pairwise momentum', default=DEFAULTS['error_estimate'], choices=["none", "jackknife", "bootstrap"])
@@ -575,3 +611,4 @@ if __name__ == "__main__":
     args = vars(parser.parse_args())
 
     main(**args)
+

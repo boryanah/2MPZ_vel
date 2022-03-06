@@ -36,7 +36,7 @@ def get_P_D_A(Cosmo, RA, DEC, Z):
     P = P*CD[:, None]
     return P, D_A
 
-def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=True):
+def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
     # filename of CMB map
     if cmb_sample == "ACT_BN":
         fn = data_dir+"/cmb_data/tilec_single_tile_BN_cmb_map_v1.2.0_joint.fits" # BN
@@ -49,35 +49,34 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=True):
     elif cmb_sample == "ACT_DR5_f090":
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f090_daynight_map.fits" # DR5 f090
         msk_fn = data_dir+f"/cmb_data/comb_mask_ACT_DR5_f090_ivar_{noise_uK:d}uK_ps_{source_arcmin:.1f}arcmin.fits"
-        #msk_fn = None
     elif cmb_sample == "ACT_DR5_f150":
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f150_daynight_map.fits" # DR5 f150
         msk_fn = data_dir+f"/cmb_data/comb_mask_ACT_DR5_f150_ivar_{noise_uK:d}uK_ps_{source_arcmin:.1f}arcmin.fits"
-        #msk_fn = None
     elif cmb_sample == "Planck":
-        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits"
-        #fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits"
-        msk_fn = data_dir+f"/cmb_data/ps_mask_Planck_{source_arcmin:.1f}arcmin.fits"
-        #msk_fn = None
+        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits" # pixell
+        #fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits" # hp
+        #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00.fits"
+        msk_fn = data_dir+"/cmb_data/Planck_HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00_uK.fits"
+        #msk_fn = data_dir+f"/cmb_data/ps_mask_Planck_{source_arcmin:.1f}arcmin.fits"
         
     """
     # generate Planck map
-    res_arcmin = 1.#0.5
+    res_arcmin = 0.5
     DEC_center, RA_center = 0., 0.
     nx = int(180./(res_arcmin/60.)) # DEC
     ny = int(360./(res_arcmin/60.)) # RA
-    #nx = int(10./(res_arcmin/60.)) # DEC
-    #ny = int(30./(res_arcmin/60.)) # RA
     print("nx, ny = ", nx, ny)
     shape, wcs = enmap.geometry(shape=(nx, ny), res=res_arcmin*utils.arcmin, pos=(DEC_center, RA_center))
-    mp = reproject.enmap_from_healpix(fn, shape, wcs, ncomp=1, unit=1, lmax=6000, rot="gal,equ")
-    mp *= 1.e6 # units of uK
+    #mp = reproject.enmap_from_healpix(fn, shape, wcs, ncomp=1, unit=1.e-6, lmax=6000, rot="gal,equ")
+    mp = reproject.enmap_from_healpix(msk_fn, shape, wcs, ncomp=1, unit=1.e-6, lmax=6000, rot="gal,equ")
     mp = mp.astype(np.float32)
     print("pshape, pwcs = ", mp.shape, mp.wcs)
     print("box = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
     print("pbox = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
-    enmap.write_fits(data_dir+f"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits", mp)
+    #enmap.write_fits(data_dir+f"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits", mp)
+    enmap.write_fits(data_dir+f"/cmb_data/Planck_HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00_uK.fits", mp)
     """
+    
     # reading fits file
     mp = enmap.read_fits(fn)
 
@@ -91,7 +90,10 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=True):
         msk[mp == 0.] = 0.
     else:
         msk = enmap.read_fits(msk_fn)
-    print("msk == 0", np.sum(msk == 0.))
+        
+    if "Planck" in cmb_sample:
+        msk = msk[0] # saved as (1, 10800, 21600)
+    print("msk == 0", np.sum(np.isclose(msk, 0.))/np.product(msk.shape), msk.shape, msk.min(), msk.max(), msk.mean())
     
     # save map
     if save:
@@ -101,10 +103,9 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=True):
         eshow(mp, fig_name, **{"colorbar":True, "range": 300, "ticks": 5, "downgrade": 4})
         eshow(msk, fig_name+"_mask", **{"colorbar":True, "ticks": 5, "downgrade": 4})
         plt.close()
-    quit()
     return mp, msk
 
-def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random):
+def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random):
 
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
@@ -114,6 +115,10 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
         gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_North.fits"
     elif galaxy_sample == "BOSS_South":
         gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_South.fits"
+    elif galaxy_sample == "eBOSS_SGC":
+        gal_fn = data_dir+"/eboss_data/eBOSS_ELG_clustering_data-SGC-vDR16.fits"
+    elif galaxy_sample == "eBOSS_NGC":
+        gal_fn = data_dir+"/eboss_data/eBOSS_ELG_clustering_data-NGC-vDR16.fits"
     elif "SDSS" in galaxy_sample:
         gal_fn = data_dir+"/sdss_data/V21_DR15_Catalog_v4.txt"
     
@@ -131,9 +136,9 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
         plt.scatter(ZSPEC[ZSPEC > 0.], ZPHOTO[ZSPEC > 0.], marker='x', color='red', s=5)
         plt.show()
         """
-        mode = "ZPHOTO"
+        #mode = "ZPHOTO"
         #mode = "ZSPEC" # complete for K < 11.65
-        #mode = "ZMIX"
+        mode = "ZMIX"
         if mode == "ZPHOTO":
             Z = ZPHOTO.copy()
         elif mode == "ZSPEC":
@@ -169,9 +174,22 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
             c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
             B = c_icrs.galactic.b.value
             L = c_icrs.galactic.l.value
-            
+
         #choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
-        choice = (K_rel < 13.8) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
+        #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
+        choice = (K_rel < 13.9) & (Z > 0.03) & (Z < 0.25)  # original is 13.9
+        #choice = (K_rel < 11.65) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
+
+        lum_cut = True
+        if lum_cut:
+            K_abs = np.zeros_like(K_rel)+100. # make it faint
+            for i in range(len(Z)):
+                if Z[i] < 0.: continue
+                lum_dist = Cosmo.luminosity_distance(Z[i])*1.e6 # pc
+                K_abs[i] = K_rel[i] - 5.*(np.log10(lum_dist)-1.)
+            K_perc = np.percentile(K_abs, 33.)
+            print(K_perc)
+            choice &= (K_abs < K_perc)
         
         # apply 2MPZ mask
         B *= utils.degree
@@ -185,6 +203,12 @@ def load_galaxy_sample(galaxy_sample, cmb_sample, data_dir, cmb_box, want_random
         ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
         choice &= mask[ipix] == 1.
     elif 'BOSS' in galaxy_sample:
+        hdul = fits.open(gal_fn)
+        RA = hdul[1].data['RA'].flatten() # 0, 360
+        DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 36
+        Z = hdul[1].data['Z'].flatten()
+        choice = np.ones(len(Z), dtype=bool)
+    elif 'eBOSS' in galaxy_sample:
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten() # 0, 360
         DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 36

@@ -45,10 +45,11 @@ def cutoutGeometry(projCutout='cea', rApMaxArcmin=6., resCutoutArcmin=0.25, test
 
     return cutoutMap
 
-def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pathTestFig='figs/', test=False, cmbMask=None):
+def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pathTestFig='figs/', test=False, cmbMask=None, order=1):
     """Extracts a small CEA or CAR map around the given position, with the given angular size and resolution.
     ra, dec in degrees.
     Does it for the map, the mask and the hit count.
+    order > 1 is too slow
     """
     # enmap 
     stampMap = cutoutGeometry(rApMaxArcmin=rApMaxArcmin, resCutoutArcmin=resCutoutArcmin, projCutout=projCutout)
@@ -64,9 +65,9 @@ def extractStamp(cmbMap, ra, dec, rApMaxArcmin, resCutoutArcmin, projCutout, pat
     ipos = rotfuncs.recenter(opos[::-1], [0, 0, sourcecoord[0], sourcecoord[1]])[::-1]
 
     # Here, I use bilinear interpolation
-    stampMap[:, :] = cmbMap.at(ipos, prefilter=True, mask_nan=False, order=1)
+    stampMap[:, :] = cmbMap.at(ipos, prefilter=True, mask_nan=False, order=order)
     if cmbMask is not None:
-        stampMask[:, :] = cmbMask.at(ipos, prefilter=True, mask_nan=False, order=1)
+        stampMask[:, :] = cmbMask.at(ipos, prefilter=True, mask_nan=False, order=order)
     
         # re-threshold the mask map, to keep 0 and 1 only
         stampMask[:, :] = 1.*(stampMask[:, :]>0.5)
