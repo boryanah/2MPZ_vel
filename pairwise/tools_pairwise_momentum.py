@@ -176,8 +176,8 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             L = c_icrs.galactic.l.value
 
         #choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
-        #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
-        choice = (K_rel < 13.9) & (Z > 0.03) & (Z < 0.25)  # original is 13.9
+        choice = (K_rel < 13.9) & (Z > 0.0) #& (Z < 0.3)  # original is 13.9
+        #choice = (K_rel < 13.9) & (Z > 0.03) & (Z < 0.25)  # original is 13.9
         #choice = (K_rel < 11.65) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
 
         lum_cut = True
@@ -185,10 +185,13 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             K_abs = np.zeros_like(K_rel)+100. # make it faint
             for i in range(len(Z)):
                 if Z[i] < 0.: continue
-                lum_dist = Cosmo.luminosity_distance(Z[i])*1.e6 # pc
-                K_abs[i] = K_rel[i] - 5.*(np.log10(lum_dist)-1.)
-            K_perc = np.percentile(K_abs, 33.)
-            print(K_perc)
+                lum_dist = Cosmo.luminosity_distance(Z[i]) # Mpc
+                E_z = Z[i]
+                K_z = -6.*np.log10(1. + Z[i])
+                K_abs[i] = K_rel[i] - 5.*np.log10(lum_dist) - 25. + K_z + E_z
+            K_perc = np.percentile(K_abs, 33.) #70. zero) #40.)#33.)
+            print(K_abs.min(), K_perc, K_abs.max())
+            
             choice &= (K_abs < K_perc)
         
         # apply 2MPZ mask
@@ -248,6 +251,11 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
     DEC = DEC[choice]
     Z = Z[choice]
     index = index[choice]
+
+    if mode == "ZMIX":
+        ZSPEC = ZSPEC[choice]
+        assert len(ZSPEC) == len(Z)
+        print("percentage zspec available = ", np.sum(ZSPEC > 0.)*100./len(ZSPEC))
     print("number of galaxies = ", np.sum(choice))
 
     return RA, DEC, Z, index

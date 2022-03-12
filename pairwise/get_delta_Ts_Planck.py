@@ -24,7 +24,8 @@ from tools_pairwise_momentum import load_galaxy_sample
 # defaults
 DEFAULTS = {}
 DEFAULTS['resCutoutArcmin'] = 0.1 # stamp resolution
-DEFAULTS['galaxy_sample'] = "SDSS_L79"
+DEFAULTS['galaxy_sample'] = "2MPZ"
+DEFAULTS['Theta'] = 3.0
 
 # cosmological parameters
 wb = 0.02225
@@ -54,7 +55,12 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     data_dir = "/mnt/marvin1/boryanah/2MPZ_vel/"
     plot = False
     want_random = -1
-    rand_str = ""
+    if want_random != -1:
+        print("Requested using random galaxy positions, forcing 2MPZ-like sample")
+        galaxy_sample = "2MPZ"
+        rand_str = f"_rand{want_random:d}"
+    else:
+        rand_str = ""
     rot = (0., 0., 0.)
     
     # choices
@@ -116,7 +122,6 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     modrmap = cutoutMap.modrmap()
     inner = modrmap < radius
     outer = (modrmap >= radius) & (modrmap < np.sqrt(2.)*radius)
-    print(shape)
 
     def vec2pix_func(x, y, z, nside=nside):
         pix = hp.vec2pix(nside, x, y, z)
@@ -126,8 +131,13 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
     index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
 
-    # TESTING
-    #RA = RA[:5000]
+    # bilinear interpolation
+    posmap = cutoutMap.posmap()
+    lats = posmap[0]/utils.degree # declination in radians
+    lons = posmap[1]/utils.degree # right ascension in radians
+    pixmap = cutoutMap.pixmap()
+    pixy = posmap[0]
+    pixx = posmap[1]
     
     # create empty array for the apertures
     T_APs = np.zeros(len(RA))
@@ -146,8 +156,18 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
         T_APs[i] = np.mean(mp[ipix_inner]*msk[ipix_inner]) - np.mean(mp[ipix_outer]*msk[ipix_outer])
         #T_APs[i] = np.mean(mp[ipix_inner]) - np.mean(mp[ipix_outer])
         """
-        # get gnomonic projection no interpolation!!!
 
+        # interpolation -- mirror-turned because of pixell
+        
+        small_mp = cutoutMap.copy()
+        interp_vals = hp.get_interp_val(mp, theta=L[i]+lons, phi=B[i]+lats, nest=nest, lonlat=True)
+        small_mp = interp_vals[:, ::-1]
+        rot = (L[i], B[i], 0.) # psi is rotation along the line of sight
+        small_msk = GP.projmap(map=msk, vec2pix_func=vec2pix_func, rot=rot, coord=coord)
+        cutoutMap += small_mp
+                
+        # get gnomonic projection no interpolation!!!
+        """
         rot = (L[i], B[i], 0.) # psi is rotation along the line of sight
         small_mp = GP.projmap(map=mp, vec2pix_func=vec2pix_func, rot=rot, coord=coord)
         small_msk = GP.projmap(map=msk, vec2pix_func=vec2pix_func, rot=rot, coord=coord)
@@ -155,11 +175,12 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
         cutoutMap += small_mp
         #print("proj map = ", np.mean(small_mp[inner]))
         #print("proj map = ", np.mean(small_msk[inner]))
-
+        """
+        
         # record aperture
         T_APs[i] = np.mean((small_mp*small_msk)[inner]) - np.mean((small_mp*small_msk)[outer])
         #T_APs[i] = np.mean(small_mp[inner]) - np.mean(small_mp[outer])
-
+    
         if plot:
             plt.figure()
             plt.imshow(small_mp)
@@ -210,7 +231,7 @@ if __name__ == "__main__":
     
     # parsing arguments
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=ArgParseFormatter)
-    parser.add_argument('--Theta', '-Th', help='Aperture radius in arcmin', type=float, default=None)
+    parser.add_argument('--Theta', '-Th', help='Aperture radius in arcmin', type=float, default=DEFAULTS['Theta'])
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
