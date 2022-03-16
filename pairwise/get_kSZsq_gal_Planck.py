@@ -2,7 +2,7 @@
 """
 Usage
 -----
-$ ./get_ps_Planck.py --help
+$ ./get_kSZsq_gal_Planck.py --help
 """
 
 import time
@@ -79,11 +79,10 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     
     # load map and mask
     mp_fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits"
-    mp = hp.read_map(mp_fn, verbose=True)
-    mp *=  1.e6 # uK
     msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_Gal70.fits"
-    #msk_fn = data_dir+"/cmb_data/HFI_Mask_Gal70.fits"
+    mp = hp.read_map(mp_fn, verbose=True)
     msk = hp.read_map(msk_fn, verbose=True)
+    mp *=  1.e6 # uK
     assert len(msk) == len(mp)
     
     # create instance of the class "Class"
@@ -116,104 +115,90 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     L = L[choice]
     print("number after premasking = ", len(RA))
 
+    # power parameters
+    LMIN = 0
+    LMAX = 3*nside+1
+    ell_data = np.arange(LMIN, LMAX, 1)
+    ell_data_binned = np.linspace(100, 3000, 300)
+    
     # apply apodization
-    smooth_scale_mask = 0.05 #0.05 # in radians
+    smooth_scale_mask = 0. #0.05 # in radians
     if smooth_scale_mask > 0.:
         msk = msk*hp.smoothing(msk, fwhm=smooth_scale_mask, iter=5, verbose=False)     
     fsky = np.sum(msk)*1./len(msk)
     print("fsky = ", fsky)
-    
-    # power parameters
-    LMIN = 100
-    LMAX = 3*nside+1
-    ell = np.arange(0, LMAX, 1)
 
-    # compute power spectrum using anafast dividing by fsky
-    #cmb_masked = hp.ma(mp)
-    cmb_masked = mp*msk
-    #cmb_masked.mask = np.logical_not(msk)
-    hp.mollview(cmb_masked)
-    cl_tt = hp.anafast(cmb_masked, lmax=LMAX-1, pol=False) # uK^2
-    cl_tt /= fsky
-    print("fsky =", fsky)
-
-    # compute power of galaxies
+    # compute galaxy overdensity
+    #nside = 128; npix = hp.nside2npix(nside); ipix = hp.pixelfunc.vec2pix(nside, *vec.T) # TESTING
     gal_counts = np.zeros(npix, dtype=int)
-    print("npix = ", npix)
     ipix_un, counts = np.unique(ipix, return_counts=True)
     gal_counts[ipix_un] = counts
 
-    gal_mean = np.mean(gal_counts[msk.astype(bool)])
+    # TESTING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    #msk[gal_counts == 0.] = 0.
+    
+    gal_mean = np.mean(gal_counts*msk)
+    gal_delta = gal_counts.copy()
+    gal_delta[msk > 0.] = gal_counts[msk > 0.]/gal_mean - 1.
+    """
+    # TESTING
+    gal_mean = np.mean(gal_counts)
+    gal_delta = gal_counts.copy()
     gal_delta = gal_counts/gal_mean - 1.
-
-    #gal_masked = hp.ma(gal_delta)
-    #gal_masked.mask = np.logical_not(msk)
-    gal_masked = gal_delta * msk
-    hp.mollview(np.log10(gal_masked+2.), cmap='seismic')
+    """
+    hp.mollview(np.log10(gal_delta+2.), cmap='seismic')
+    hp.mollview(gal_delta, cmap='seismic')
+    hp.mollview(gal_counts, cmap='seismic')
     plt.show()
+    
+    
+    # mask galaxy and CMB field
+    gal_masked = gal_delta * msk
+    cmb_masked = mp * msk
     
     # compute shotnoise
     gal_nbar = gal_mean/hp.nside2pixarea(nside)
-    N_gg = 1/gal_nbar * np.ones_like(ell) #galaxy shot noise
+    N_gg = 1/gal_nbar * np.ones_like(ell_data) #galaxy shot noise
     print("number of galaxies per deg^2 = ", gal_nbar/(180.**2/np.pi**2))
-    print("shotnoise = ", N_gg)
+    print("shotnoise = ", N_gg[0])
 
-    cl_gg = hp.anafast(gal_masked, lmax=LMAX - 1, pol=False)
-    cl_gg /= fsky
-
-    # load cmb power from theory
-    camb_theory = powspec.read_spectrum("camb_data/camb_theory.dat", scale=True) # scaled by 2pi/l/(l+1) to get C_ell
-    cltt = camb_theory[0, 0, :3000]
-    ls = np.arange(cltt.size)
-    ell_ksz, cl_ksz = np.loadtxt("camb_data/cl_ksz_bat.dat", unpack=True)
-
-    # bin power
-    np.save("camb_data/Planck_power.npy", cl_tt)
-    np.save("camb_data/Planck_ell.npy", ell)
-    bins = np.linspace(100, 4000, 40)
-    cl_tt_binned, ell_binned = bin_mat(ell, cl_tt, bins)
-
-    # create kSZ filter
-    #f_ell = np.interp(ell_binned, ell_ksz, cl_ksz)/cl_tt_binned
-    f_ell = np.interp(ell, ell_ksz, cl_ksz)/np.interp(ell, ell_binned, cl_tt_binned)
-    f_ell[(ell < 100) | (ell > 3000)] = 0.
+    # load filter
+    fl_ksz = np.load("camb_data/Planck_filter_kSZ.npy") # F(ell)
+    ell_ksz = np.load("camb_data/Planck_ell_kSZ.npy")
+    fl_ksz /= np.max(fl_ksz)
     
-    plot_filter = True
-    if plot_filter:
-        #plt.plot(ell, f_ell*ell**2, label='filter')
-        #plt.plot(ell_ksz[ell_ksz < 3000], (cl_ksz)[ell_ksz < 3000])
-        #plt.plot(ell, cl_tt*ell**2)
-        plt.plot(ell_binned, cl_tt_binned*ell_binned**2)
-        plt.plot(ls, cltt*ls**2, lw=3, color='k') # D_ell = C_ell l (l+1)/2pi (muK^2)
-        plt.legend()
-        plt.show()
-
+    # apply filter
     pix_area = 4*np.pi/npix
-    ipix_area = 1./pix_area
-    cmb_fltr_masked = hp.alm2map(hp.almxfl(hp.map2alm(cmb_masked, iter=3), f_ell), nside)*ipix_area
+    cmb_fltr_masked = hp.alm2map(hp.almxfl(hp.map2alm(cmb_masked, iter=3), fl_ksz), nside)
+    hp.mollview(cmb_fltr_masked)
+    plt.show()
     
     # measure cross power spectrum
-    cl_kszsq_gal = hp.anafast(cmb_fltr_masked**2, gal_masked, lmax=LMAX-1, pol=False)
-    cl_kszsq_gal_binned, ell_binned = bin_mat(ell, cl_kszsq_gal, bins)
+    cl_kszsq_gal = hp.anafast(cmb_fltr_masked**2, gal_masked, lmax=LMAX-1, pol=False)/fsky
+    cl_ksz_gal = hp.anafast(cmb_fltr_masked, gal_masked, lmax=LMAX-1, pol=False)/fsky
+    cl_kszsq = hp.anafast(gal_masked, lmax=LMAX-1, pol=False)/fsky
+    cl_gal = hp.anafast(cmb_fltr_masked**2, lmax=LMAX-1, pol=False)/fsky
+    np.savez(f"kszsq_gal_data/cl_all_{galaxy_sample}_Planck.npz", cl_gal=cl_gal, cl_kszsq=cl_kszsq, cl_ksz_gal=cl_ksz_gal, cl_kszsq_gal=cl_kszsq_gal, ell=ell_data)
+    ell_data_binned = np.linspace(100, 3000, 15)
+    ell_data_binned, cl_kszsq_gal_binned = bin_mat(ell_data, cl_kszsq_gal, ell_data_binned)
     
-    plt.figure(1)
-    plt.plot(ell_binned, cl_kszsq_gal_binned*ell_binned*(ell_binned+1.)/(np.pi*2.))
-    
-    # plot and compare with theory
-    plt.figure(2)
-    plt.plot(ell, cl_tt*ell*(ell+1.)/(np.pi*2.))
-    plt.plot(ls, cltt*ls*(ls+1)/(np.pi*2.), lw=3, color='k') # D_ell = C_ell l (l+1)/2pi (muK^2)
+    plt.figure(1, figsize=(9, 7))
+    plt.plot(ell_data_binned, cl_kszsq_gal_binned*ell_data_binned*(ell_data_binned+1.)/(np.pi*2.))
+    plt.xlabel(r'$\ell$')
+    plt.ylabel(r'$\ell (\ell + 1) C_\ell^{T^2_{\rm clean}\times \delta_g}/2 \pi \ [\mu K^2]$')
+    plt.savefig('kszsq_gal_figs/cl_kszsq_gal.png')
     #plt.show()
 
-    plt.figure(3)
-    plt.plot(ell, (cl_gg-N_gg)*ell*(ell+1.)/(np.pi*2.), ls='--')
-    plt.plot(ell, cl_gg*ell*(ell+1.)/(np.pi*2.))
+    plt.figure(2, figsize=(9, 7))
+    plt.axhline(N_gg[0], ls='--', c='black')
+    plt.plot(ell_data, cl_gal)
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.xlabel(r'$\ell$')
+    plt.ylabel(r'$C_\ell^{gg}$')
+    plt.savefig('kszsq_gal_figs/cl_gal.png')
     plt.show()
-    quit()
-
-    np.save(delta_T_fn, delta_Ts)
-    np.save(index_fn, index)
-
+    
 class ArgParseFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
     pass
 
@@ -225,8 +210,8 @@ if __name__ == "__main__":
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
-                        choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D",
-                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC"])
+                        choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D", "2MPZ_Biteau", "WISExSCOS",
+                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC", "DECALS"])
     args = vars(parser.parse_args())
 
     main(**args)

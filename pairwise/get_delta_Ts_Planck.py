@@ -10,6 +10,8 @@ import argparse
 
 import numpy as np
 import healpy as hp
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from healpy.projector import GnomonicProj
 
@@ -113,6 +115,21 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     L = L[choice]
     print("number after premasking = ", len(RA))
 
+    # TESTING!!!!!!!!!!!!!!!!!!!!!!!!
+    if Theta > 3.000001:
+        # load filter
+        fl_ksz = np.load("camb_data/Planck_filter_kSZ.npy")
+        # TESTING
+        fl_ksz /= np.max(fl_ksz)
+        ell_ksz = np.load("camb_data/Planck_ell_kSZ.npy")
+
+        # apply filter
+        pix_area = 4*np.pi/npix
+        ipix_area = 1./pix_area # normalization needed???
+        mp = hp.alm2map(hp.almxfl(hp.map2alm(mp*msk, iter=3), fl_ksz), nside) #*ipix_area
+        #hp.mollview(cmb_fltr_masked)
+        #plt.show()
+    
     # initialize projection class
     GP = GnomonicProj(rot=rot, coord=coord, xsize=xsize, ysize=ysize, reso=resCutoutArcmin)
 
@@ -138,6 +155,9 @@ def main(galaxy_sample, resCutoutArcmin, Theta):
     pixmap = cutoutMap.pixmap()
     pixy = posmap[0]
     pixx = posmap[1]
+
+    # TESTING!!!!!!!!!!!!!!!
+    #RA = RA[:3000]
     
     # create empty array for the apertures
     T_APs = np.zeros(len(RA))
@@ -235,7 +255,7 @@ if __name__ == "__main__":
     parser.add_argument('--resCutoutArcmin', help='Resolution of the cutout', type=float, default=DEFAULTS['resCutoutArcmin'])
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
-                        choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D",
+                        choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D", "2MPZ_Biteau",
                                  "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC"])
     args = vars(parser.parse_args())
 

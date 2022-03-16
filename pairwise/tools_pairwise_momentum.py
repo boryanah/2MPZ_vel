@@ -111,6 +111,16 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
     if galaxy_sample == "2MPZ":
         gal_fn = data_dir+"/2mpz_data/2MPZ_FULL_wspec_coma_complete.fits"#2MPZ.fits
         mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
+    elif galaxy_sample == "2MPZ_Biteau":
+        #gal_fn = data_dir+"/2mpz_data/2MPZ_Biteau.npz"
+        gal_fn = data_dir+"/2mpz_data/2MPZ_Biteau_radec.npz"
+        mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
+    elif galaxy_sample == "WISExSCOS":
+        gal_fn = data_dir+"wisexscos_data/WIxSC.fits"
+        mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
+    elif galaxy_sample == "DECALS":
+        gal_fn = data_dir+"dels_data/Legacy_Survey_DECALS_galaxies-selection.fits"
+        mask_fn = data_dir+"dels_data/Legacy_footprint_final_mask.fits"
     elif galaxy_sample == "BOSS_North":
         gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_North.fits"
     elif galaxy_sample == "BOSS_South":
@@ -176,10 +186,12 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             L = c_icrs.galactic.l.value
 
         #choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
-        choice = (K_rel < 13.9) & (Z > 0.0) #& (Z < 0.3)  # original is 13.9
-        #choice = (K_rel < 13.9) & (Z > 0.03) & (Z < 0.25)  # original is 13.9
-        #choice = (K_rel < 11.65) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
-
+        #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
+        #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.0773)
+        choice = (K_rel < 13.9)# & (Z > 0.0)
+        #choice = (K_rel < 11.65) & (Z > 0.0) & (Z < 0.3)
+        #choice = (K_rel < 13.9) & (Z < 0.15); Z[Z < 0.] = 0.
+        
         lum_cut = True
         if lum_cut:
             K_abs = np.zeros_like(K_rel)+100. # make it faint
@@ -189,7 +201,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
                 E_z = Z[i]
                 K_z = -6.*np.log10(1. + Z[i])
                 K_abs[i] = K_rel[i] - 5.*np.log10(lum_dist) - 25. + K_z + E_z
-            K_perc = np.percentile(K_abs, 33.) #70. zero) #40.)#33.)
+            K_perc = np.percentile(K_abs, 40.)#33.)
             print(K_abs.min(), K_perc, K_abs.max())
             
             choice &= (K_abs < K_perc)
@@ -205,6 +217,97 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         nside = hp.npix2nside(npix)
         ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
         choice &= mask[ipix] == 1.
+    elif '2MPZ_Biteau' == galaxy_sample:
+        data = np.load(gal_fn)
+        RA = data['RA']
+        DEC = data['DEC']
+        #Z = data['Z']
+        Z = data['Z_hdul'] # TESTING
+        Mstar = data['M_star']
+        d_L = data['d_L']
+        B = data['B']
+        L = data['L']
+        choice = np.ones(len(Z), dtype=bool)
+
+        #c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
+        #B = c_icrs.galactic.b.value
+        #L = c_icrs.galactic.l.value
+
+        # apply 2MPZ mask
+        B *= utils.degree
+        L *= utils.degree
+        x = np.cos(B)*np.cos(L)
+        y = np.cos(B)*np.sin(L)
+        z = np.sin(B)
+        mask = hp.read_map(mask_fn) # ring, not nested
+        npix = len(mask)
+        nside = hp.npix2nside(npix)
+        ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
+        choice &= mask[ipix] == 1.
+        
+        mass_cut = True
+        if mass_cut:
+            Mstar_perc = np.percentile(Mstar, 30.)
+            print("Mstar threshold = ", Mstar_perc)
+            Mstar_perc = 10.3 # TESTING
+            print("Mstar threshold = ", Mstar_perc)
+            choice &= (Mstar > Mstar_perc)
+        dL_max = 350. # Mpc sample complete 0.0773
+        dL_min = 100. # Mpc 0.0229
+        #dL_min = 0. # Mpc 0.
+        choice &= (d_L < dL_max) & (d_L > dL_min)
+        
+        # could add mask
+    elif galaxy_sample == 'WISExSCOS':
+        hdul = fits.open(gal_fn)
+        RA = hdul[1].data['RA'].flatten()/utils.degree # 0, 360
+        DEC = hdul[1].data['DEC'].flatten()/utils.degree # -90, 90
+        B = hdul[1].data['B'].flatten() # 0, 360
+        L = hdul[1].data['L'].flatten() # -90, 90
+        print("DEC min/max", DEC.min(), DEC.max())
+        Z = hdul[1].data['ZPHOTO_ANN'].flatten()
+
+        # apply mask
+        B *= utils.degree
+        L *= utils.degree
+        x = np.cos(B)*np.cos(L)
+        y = np.cos(B)*np.sin(L)
+        z = np.sin(B)
+        mask = hp.read_map(mask_fn) # ring, not nested
+        npix = len(mask)
+        nside = hp.npix2nside(npix)
+        ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
+        choice = mask[ipix] == 1.
+
+    elif galaxy_sample == "DECALS":
+        hdul = fits.open(gal_fn)
+        RA = hdul[1].data['RA'].flatten() # 0, 360
+        DEC = hdul[1].data['DEC'].flatten() # -90, 90
+        Z = hdul[1].data['PHOTOZ_3DINFER'].flatten()
+        choice = np.ones(len(Z), dtype=bool)
+
+        """
+        #c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
+        #B = c_icrs.galactic.b.value
+        #L = c_icrs.galactic.l.value
+
+        # apply mask
+        #B *= utils.degree
+        #L *= utils.degree
+        B = RA*utils.degree # TESTING
+        L = DEC*utils.degree # TESTING
+        x = np.cos(B)*np.cos(L)
+        y = np.cos(B)*np.sin(L)
+        z = np.sin(B)
+        mask = hp.read_map(mask_fn) # ring, not nested
+        npix = len(mask)
+        nside = hp.npix2nside(npix)
+        ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
+        choice &= mask[ipix] == 1.
+        """
+        print("DEC min/max", DEC.min(), DEC.max())
+        print("RA min/max", RA.min(), RA.max())
+        
     elif 'BOSS' in galaxy_sample:
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten() # 0, 360
@@ -252,10 +355,11 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
     Z = Z[choice]
     index = index[choice]
 
-    if mode == "ZMIX":
-        ZSPEC = ZSPEC[choice]
-        assert len(ZSPEC) == len(Z)
-        print("percentage zspec available = ", np.sum(ZSPEC > 0.)*100./len(ZSPEC))
+    if galaxy_sample == "2MPZ":
+        if mode == "ZMIX":
+            ZSPEC = ZSPEC[choice]
+            assert len(ZSPEC) == len(Z)
+            print("percentage zspec available = ", np.sum(ZSPEC > 0.)*100./len(ZSPEC))
     print("number of galaxies = ", np.sum(choice))
 
     return RA, DEC, Z, index
