@@ -45,14 +45,8 @@ def main(galaxy_sample):
     coord = 'G' # milky way at 0 0  (GE not working if not doing Gnomonic)
     cmb_sample = "Planck_healpix"
     nest = False # Ordering converted to RING # default
-    vary_str = "fixed"
-    mask_str = "_premask"
-    mask_type = ""
-    projCutout = 'cea'
     cmb_box = {'decfrom': -90., 'decto': 90., 'rafrom': 0., 'rato': 360.}
-    sigma_z = 0.01
     data_dir = "/mnt/marvin1/boryanah/2MPZ_vel/"
-    plot = False
     want_random = -1
     if want_random != -1:
         print("Requested using random galaxy positions, forcing 2MPZ-like sample")
@@ -126,9 +120,11 @@ def main(galaxy_sample):
     print("fsky = ", fsky)
 
     # compute overdensity
-    gal_mean = np.mean(gal_counts*msk)
+    gal_mean = np.sum(gal_counts*msk)/np.sum(msk)
+    print("total number of galaxies = ", np.sum(gal_counts*msk))
     gal_delta = gal_counts.copy()
     gal_delta[msk > 0.] = gal_counts[msk > 0.]/gal_mean - 1.
+    print("mean density = ", np.mean(gal_delta[msk > 0.]))
     #hp.mollview(np.log10(gal_delta+1.), cmap='seismic')
     #hp.mollview(gal_counts, cmap='seismic')
     #plt.show()
@@ -144,7 +140,7 @@ def main(galaxy_sample):
     print("shotnoise = ", N_gg[0])
 
     # load filter
-    fl_ksz = np.load("camb_data/Planck_filter_kSZ.npy") # F(ell)
+    fl_ksz = np.load("camb_data/Planck_filter_taper_kSZ.npy") # F(ell)
     ell_ksz = np.load("camb_data/Planck_ell_kSZ.npy")
     fl_ksz /= np.max(fl_ksz)
     
@@ -157,8 +153,8 @@ def main(galaxy_sample):
     # measure cross power spectrum
     cl_kszsq_gal = hp.anafast(cmb_fltr_masked**2, gal_masked, lmax=LMAX-1, pol=False)/fsky
     cl_ksz_gal = hp.anafast(cmb_fltr_masked, gal_masked, lmax=LMAX-1, pol=False)/fsky
-    cl_kszsq = hp.anafast(gal_masked, lmax=LMAX-1, pol=False)/fsky
-    cl_gal = hp.anafast(cmb_fltr_masked**2, lmax=LMAX-1, pol=False)/fsky
+    cl_gal = hp.anafast(gal_masked, lmax=LMAX-1, pol=False)/fsky
+    cl_kszsq = hp.anafast(cmb_fltr_masked**2, lmax=LMAX-1, pol=False)/fsky
     np.savez(f"kszsq_gal_data/cl_all_{galaxy_sample}_Planck.npz", cl_gal=cl_gal, cl_kszsq=cl_kszsq, cl_ksz_gal=cl_ksz_gal, cl_kszsq_gal=cl_kszsq_gal, ell=ell_data)
 
     # bin power spectra
