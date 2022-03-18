@@ -188,7 +188,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         #choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
         #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
         #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.0773)
-        choice = (K_rel < 13.9)# & (Z > 0.0)
+        choice = (K_rel < 13.9) & (Z > 0.0)
         #choice = (K_rel < 11.65) & (Z > 0.0) & (Z < 0.3)
         #choice = (K_rel < 13.9) & (Z < 0.15); Z[Z < 0.] = 0.
         
@@ -265,8 +265,9 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         B = hdul[1].data['B'].flatten() # 0, 360
         L = hdul[1].data['L'].flatten() # -90, 90
         print("DEC min/max", DEC.min(), DEC.max())
-        Z = hdul[1].data['ZPHOTO_ANN'].flatten()
-
+        Z = hdul[1].data['ZPHOTO_CORR'].flatten()
+        choice = (Z > 0.1) & (Z < 0.35)
+        
         # apply mask
         B *= utils.degree
         L *= utils.degree
@@ -277,7 +278,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         npix = len(mask)
         nside = hp.npix2nside(npix)
         ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
-        choice = mask[ipix] == 1.
+        choice &= mask[ipix] == 1.
 
     elif galaxy_sample == "DECALS":
         hdul = fits.open(gal_fn)
@@ -285,7 +286,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         DEC = hdul[1].data['DEC'].flatten() # -90, 90
         Z = hdul[1].data['PHOTOZ_3DINFER'].flatten()
         choice = np.ones(len(Z), dtype=bool)
-
+        
         """
         #c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
         #B = c_icrs.galactic.b.value

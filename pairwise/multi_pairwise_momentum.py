@@ -22,7 +22,7 @@ from astropy import units as u
 
 from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, tophat_filter, calc_T_MF
 from estimator import pairwise_momentum
-from numba_2pcf.cf import numba_pairwise_vel
+from numba_2pcf.cf import numba_pairwise_vel#, numba_2pcf
 from tools_pairwise_momentum import get_P_D_A, load_cmb_sample, load_galaxy_sample, get_sdss_lum_lims
 
 from contextlib import closing
@@ -222,7 +222,7 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         new_inds = np.random.choice(inds, len(inds))
         P_new = P[new_inds]
         delta_Ts_new = delta_Ts[new_inds]
-        #DD_old, PV_old = pairwise_momentum(P_new, delta_Ts_new, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
+        #DD, PV = pairwise_momentum(P_new, delta_Ts_new, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
         assert is_log_bin == False
         assert rbins[0] == 0.
         PV = numba_pairwise_vel(P_new, delta_Ts_new, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)['pairwise']
@@ -249,7 +249,22 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     else:
         rand_str = ""
 
-
+    # file names and power spectrum for matched filter
+    if want_MF:
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_index.npy"
+        if "DR5" in cmb_sample:
+            binned_power = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_binned_power.npy")
+            centers = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_centers.npy")
+        else:
+            binned_power = np.load(f"camb_data/{cmb_sample}_binned_power.npy")
+            centers = np.load(f"camb_data/{cmb_sample}_centers.npy")
+        power = np.vstack((centers, binned_power)).T
+    else:
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
+        power = None
+        
     # create instance of the class "Class"
     Cosmo = Class()
     Cosmo.set(COSMO_DICT)
@@ -257,7 +272,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
     if "healpix" in cmb_sample:
         cmb_box = {'decfrom': -90., 'decto': 90., 'rafrom': 0., 'rato': 360.}
-        
+        if not (os.path.exists(delta_T_fn) and os.path.exists(index_fn)):
+            print("Missing files for computing pairwise estimator on healpix-generated delta Ts. This script can't generate those, need to run `get_delta_Ts_Planck.py` with the same settings.")
+            quit()
     else:
         # load CMB map and mask
         mp, msk = load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK)
@@ -300,21 +317,6 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         Z = Z[choice]
         P = P[choice]
         print("number after premasking = ", len(RA))
-
-    if want_MF:
-        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_index.npy"
-        if "DR5" in cmb_sample:
-            binned_power = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_binned_power.npy")
-            centers = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_centers.npy")
-        else:
-            binned_power = np.load(f"camb_data/{cmb_sample}_binned_power.npy")
-            centers = np.load(f"camb_data/{cmb_sample}_centers.npy")
-        power = np.vstack((centers, binned_power)).T
-    else:
-        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
-        power = None
 
     # if files don't exist, need to compute
     if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
@@ -458,7 +460,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     # define bins in Mpc
     rbins = np.linspace(0., 150., 16) # Mpc
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
-    nthread = os.cpu_count()//4
+    nthread = 3 #os.cpu_count()//4
     is_log_bin = False
     
     # change dtype to speed up calculation
@@ -504,20 +506,24 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV_jack.npy", PV_jack)
         np.save(f"data/rbinc.npy", rbinc)
     elif want_error == "bootstrap":
-        t = time.time()
         assert is_log_bin == False
         assert rbins[0] == 0.
+
+        #DD, PV = pairwise_momentum(P, delta_Ts, rbins, is_log_bin, dtype=dtype, nthread=nthread)
+        
+        t = time.time()
+        #table =  numba_2pcf(P, box=1000., Rmax=np.max(rbins), nbin=len(rbins)-1, nthread=-1, n1djack=None, pg_kwargs=None, corrfunc=False)
         table = numba_pairwise_vel(P, delta_Ts, box=None, Rmax=np.max(rbins), nbin=len(rbins)-1, corrfunc=False, nthread=nthread, periodic=False)
         print("first calculation took = ", time.time()-t)
         DD = table['npairs']
         PV = table['pairwise']
+        
         # save arrays
         if want_MF:
             np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV.npy", PV)
         else:
             np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
 
-        
         # For simplicity, make sure the total size is a multiple of the number of processes.
         n_processes = 10 #os.cpu_count() 
         n = n_sample // n_processes
@@ -542,9 +548,6 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             p.starmap(parallel_bootstrap_pairwise, zip(index_ranges, repeat(inds), repeat(P), repeat(delta_Ts), repeat(rbins), repeat(is_log_bin), repeat(dtype), repeat(nthread)))
         # Close the processes.
         p.join()
-        
-        # compute bootstraps
-        #PV_boot, PV_mean, PV_err = bootstrap_pairwise_momentum(P, delta_Ts, rbins, is_log_bin=is_log_bin, dtype=dtype, nthread=nthread)
 
         # save arrays
         if want_MF:
@@ -590,7 +593,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=ArgParseFormatter)
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
-                        choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D",
+                        choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D", "2MPZ_Biteau",
                                  "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC"])
     parser.add_argument('--cmb_sample', '-cmb', help='Which CMB sample do you want to use?',
                         default=DEFAULTS['cmb_sample'],
