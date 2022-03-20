@@ -53,10 +53,10 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f150_daynight_map.fits" # DR5 f150
         msk_fn = data_dir+f"/cmb_data/comb_mask_ACT_DR5_f150_ivar_{noise_uK:d}uK_ps_{source_arcmin:.1f}arcmin.fits"
     elif cmb_sample == "Planck":
-        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits" # pixell
+        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits" # pixell (because "Planck_")
         #fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits" # hp
-        #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00.fits"
-        msk_fn = data_dir+"/cmb_data/Planck_HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00_uK.fits"
+        #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00.fits" # point sources hp
+        msk_fn = data_dir+"/cmb_data/Planck_HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00_uK.fits" # combined
         #msk_fn = data_dir+f"/cmb_data/ps_mask_Planck_{source_arcmin:.1f}arcmin.fits"
         
     """
@@ -93,7 +93,9 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         
     if "Planck" in cmb_sample:
         msk = msk[0] # saved as (1, 10800, 21600)
-    print("msk == 0", np.sum(np.isclose(msk, 0.))/np.product(msk.shape), msk.shape, msk.min(), msk.max(), msk.mean())
+        msk[msk < 0.5] = 0.
+        msk[msk >= 0.5] = 1.
+    print("fsky", np.sum(np.isclose(msk, 0.))/np.product(msk.shape), msk.shape, msk.min(), msk.max(), msk.mean())
     
     # save map
     if save:
@@ -105,7 +107,7 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         plt.close()
     return mp, msk
 
-def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random):
+def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random, return_mask=False):
 
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
@@ -113,14 +115,16 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
     elif galaxy_sample == "2MPZ_Biteau":
         #gal_fn = data_dir+"/2mpz_data/2MPZ_Biteau.npz"
-        gal_fn = data_dir+"/2mpz_data/2MPZ_Biteau_radec.npz"
+        #gal_fn = data_dir+"/2mpz_data/2MPZ_Biteau_radec.npz"
+        gal_fn = data_dir+"/2mpz_data/2MPZ_Biteau_radec_cut.npz" # remove unidentified objects
         mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
     elif galaxy_sample == "WISExSCOS":
         gal_fn = data_dir+"wisexscos_data/WIxSC.fits"
         mask_fn = data_dir+"/2mpz_data/WISExSCOSmask.fits"
     elif galaxy_sample == "DECALS":
-        gal_fn = data_dir+"dels_data/Legacy_Survey_DECALS_galaxies-selection.fits"
-        mask_fn = data_dir+"dels_data/Legacy_footprint_final_mask.fits"
+        gal_fn1 = data_dir+"dels_data/Legacy_Survey_DECALS_galaxies-selection.fits"
+        gal_fn2 = data_dir+"dels_data/Legacy_Survey_BASS-MZLS_galaxies-selection.fits"
+        mask_fn = data_dir+"dels_data/Legacy_footprint_final_mask_cut_decm36_galactic.fits"
     elif galaxy_sample == "BOSS_North":
         gal_fn = data_dir+"/boss_data/galaxy_DR12v5_CMASS_North.fits"
     elif galaxy_sample == "BOSS_South":
@@ -221,17 +225,17 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         data = np.load(gal_fn)
         RA = data['RA']
         DEC = data['DEC']
-        #Z = data['Z']
-        Z = data['Z_hdul'] # TESTING
+        Z = data['Z']
+        #Z = data['Z_hdul'] # redshifts coming from original data
         Mstar = data['M_star']
         d_L = data['d_L']
         B = data['B']
         L = data['L']
         choice = np.ones(len(Z), dtype=bool)
 
-        #c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
-        #B = c_icrs.galactic.b.value
-        #L = c_icrs.galactic.l.value
+        c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
+        B = c_icrs.galactic.b.value
+        L = c_icrs.galactic.l.value
 
         # apply 2MPZ mask
         B *= utils.degree
@@ -252,9 +256,11 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             Mstar_perc = 10.3 # TESTING
             print("Mstar threshold = ", Mstar_perc)
             choice &= (Mstar > Mstar_perc)
-        dL_max = 350. # Mpc sample complete 0.0773
-        dL_min = 100. # Mpc 0.0229
-        #dL_min = 0. # Mpc 0.
+        #dL_max = 350. # Mpc sample complete 0.0773
+        dL_max = np.max(d_L) # Mpc sample complete 0.0773
+        #dL_min = 100. # Mpc 0.0229
+        dL_min = 0. # Mpc 0.
+        print("d_L min/max = ", dL_min, dL_max)
         choice &= (d_L < dL_max) & (d_L > dL_min)
         
         # could add mask
@@ -281,22 +287,25 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         choice &= mask[ipix] == 1.
 
     elif galaxy_sample == "DECALS":
-        hdul = fits.open(gal_fn)
+        hdul = fits.open(gal_fn1)
         RA = hdul[1].data['RA'].flatten() # 0, 360
         DEC = hdul[1].data['DEC'].flatten() # -90, 90
         Z = hdul[1].data['PHOTOZ_3DINFER'].flatten()
+
+        hdul = fits.open(gal_fn2)
+        RA = np.hstack((RA, hdul[1].data['RA'].flatten())) # 0, 360
+        DEC = np.hstack((DEC, hdul[1].data['DEC'].flatten())) # -90, 90
+        Z = np.hstack((Z, hdul[1].data['PHOTOZ_3DINFER'].flatten()))
+        
         choice = np.ones(len(Z), dtype=bool)
         
-        """
-        #c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
-        #B = c_icrs.galactic.b.value
-        #L = c_icrs.galactic.l.value
+        c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
+        B = c_icrs.galactic.b.value
+        L = c_icrs.galactic.l.value
 
         # apply mask
-        #B *= utils.degree
-        #L *= utils.degree
-        B = RA*utils.degree # TESTING
-        L = DEC*utils.degree # TESTING
+        B *= utils.degree
+        L *= utils.degree
         x = np.cos(B)*np.cos(L)
         y = np.cos(B)*np.sin(L)
         z = np.sin(B)
@@ -305,7 +314,6 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         nside = hp.npix2nside(npix)
         ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
         choice &= mask[ipix] == 1.
-        """
         print("DEC min/max", DEC.min(), DEC.max())
         print("RA min/max", RA.min(), RA.max())
         
@@ -363,6 +371,12 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             print("percentage zspec available = ", np.sum(ZSPEC > 0.)*100./len(ZSPEC))
     print("number of galaxies = ", np.sum(choice))
 
+    if return_mask:
+        try:
+            mask
+        except:
+            mask = None
+        return RA, DEC, Z, index, mask
     return RA, DEC, Z, index
 
 def get_sdss_lum_lims(galaxy_sample):

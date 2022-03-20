@@ -94,6 +94,13 @@ def get_tzav_and_w_nb(dT, z, zj, sigma_z, res1, res2):
         res1 += dT[i] * np.exp(-(zj[0]-z[i])**2.0/(2.0*sigma_z**2))
         res2 += np.exp(-(zj[0]-z[i])**2/(2.0*sigma_z**2))
 
+def get_tzav_and_w_nb_dumb(dT, z, zj, sigma_z, res1, res2):
+    '''Launched by get_tzav to compute formula (equiv. but slower) '''
+    for j in range(len(zj)):
+        for i in range(dT.shape[0]):
+            res1[j] += dT[i] * np.exp(-(zj[j]-z[i])**2.0/(2.0*sigma_z**2))
+            res2[j] += np.exp(-(zj[j]-z[i])**2/(2.0*sigma_z**2))
+
 def get_tzav(dTs, zs, sigma_z):
     '''Computes the dT dependency to redshift.
     dTs: Temperature decrements
@@ -163,7 +170,7 @@ def compute_power(imap, modlmap=None, apod_pix=20, mask=None, test=False):
 
     # compute power in the map, bin, 
     power = np.real(kmap * np.conj(kmap))
-    bin_edges = np.arange(0, 6000, 40)
+    bin_edges = np.arange(0, 10000, 100)
     centers = (bin_edges[1:] + bin_edges[:-1])/2.
     binned_power = bin(power, modlmap, bin_edges)/w2
 
@@ -200,7 +207,7 @@ def gaussian_filter(modlmap, ell_0=1800, ell_sigma=500):
 
 def tophat_filter(modrmap, rad_arcmin):
     emap = modrmap*0
-    # TESTING ask stuff about fourier transforming factors (with fft)
+    
     radius = rad_arcmin*utils.arcmin
     inner = modrmap < radius
     outer = (modrmap >= radius) & (modrmap < np.sqrt(2.)*radius)
@@ -209,63 +216,187 @@ def tophat_filter(modrmap, rad_arcmin):
     filt_map = enmap.fft(emap, normalize='phys')
     return filt_map
 
+def kSZ_filter(modrmap):
+    # load theoretical kSZ power spectrum
+    ell_ksz, cl_ksz = np.loadtxt("camb_data/cl_ksz_bat.dat", unpack=True)
+    cl_ksz /= (ell_ksz*(ell_ksz+1)/(2.*np.pi))
+
+    # get ell distance map
+    modlmap = modrmap.modlmap()
+    
+    # translate into 2D fourier map
+    emap = interpolate.interp1d(ell_ksz, cl_ksz, bounds_error=False, fill_value=0)(modlmap)
+    
+    # fourier transform
+    filt_map = modlmap.copy()
+    filt_map[:, :] = emap[:, :]
+    return filt_map
+
+def GNFW_filter(modrmap, theta_500=4., c_500=1.156, alpha=1.062, beta=5.4807, gamma=0.3292):
+    """
+    From David's paper. theta_500 = 1.8 # arcmin, 2.e13 Msun/h; theta_500 = 2.1 # arcmin, 2.e14 Msun/h
+    """
+    # arrray of angular sizes in real space
+    thetas = np.linspace(modrmap.min(), modrmap.max(), 1001) # radians
+    thetas = 0.5*(thetas[1:] + thetas[:-1])
+    
+    # translate to radians
+    theta_500 *= utils.arcmin
+
+    # compute filter in real space
+    u_kSZs = np.zeros_like(thetas)
+    for i in range(len(thetas)):
+        u_kSZs[i] = u_kSZ(thetas[i], theta_500, c_500, alpha, beta, gamma)
+    
+    # translate into 2D map
+    emap = interpolate.interp1d(thetas, u_kSZs, bounds_error=False, fill_value=None)(modrmap)
+    emap = np.nan_to_num(emap)
+    
+    # fourier transform
+    umap = modrmap.copy()
+    umap[:, :] = emap[:, :]
+    filt_map = enmap.fft(umap, normalize='phys')
+    return filt_map
+    
 def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False, apod_pix=20):
     # what do with mask??
-    # what tf is the output a
-    # what do with filter
-    # nothing to see in the filtered map
-    # presave power spectrum and modlmap (using camb and power measure)
-    
-    # fourier magnitude mode map
-    modlmap = imap.modlmap()
 
-    # TESTING
+    # make sure not empty
+    assert fmap is not None
+    assert power is not None
+
     # apodize and take fft
-    taper = enmap.apod(imap*0+1, apod_pix) # I pass in an array of ones the same shape,wcs as imap
-    kmap = enmap.fft(imap*taper, normalize="phys")
+    taper = enmap.apod(imap*0+1., apod_pix) # pass an array of ones; same shape, wcs as imap
+    #imap_tapered = (imap*taper) # for some reason with ACT this gives me highest SNR (apod = 20) than apod = 0 or below version (better than apod = 0?)
+    # this seems the most physical version to me
+    mean_imap = np.mean(imap)
+    imap = imap/mean_imap - 1.
+    imap_tapered = (imap*taper + 1)*mean_imap
+    kmap = enmap.fft(imap_tapered, normalize="phys", nthread=1) # nthread important when running in parallel
 
-    # get filter
-    if fmap is None:
-        print("hopefully never")
-        fmap = gaussian_filter(modlmap)
-
-    if power is None:
-        print("hopefully never2")
-        # smooth with savitsky and expand back to 2d
-        binned_power, centers = compute_power(imap, modlmap=modlmap)
-        binned_power = savgol_filter(binned_power, 21, 3)
-    else:
-        binned_power, centers = power[:, 1], power[:, 0]
-    """
-    power_map = interpolate.interp1d(centers, binned_power, bounds_error=False, fill_value=0)(modlmap)
-    power_map = power_map.flatten()
-    #inv_C_power = np.diag(1./power_map)
-    inv_C_power = (1./power_map)
+    # flattened inverse power spectrum
+    inv_C_power = (1./power)
     inv_C_power = np.nan_to_num(inv_C_power)
-    """
-    # TESTING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    inv_C_power = np.ones_like(modlmap.flatten())
+    inv_C_power[power == 0.] = 0.
     
     if test:        
-        kfiltered = kmap * fmap
-        filtered = enmap.ifft(kfiltered, normalize="phys").real
-        eshow(filtered, "filtered")
-        plt.close()
-        eshow(imap, "unfiltered")
-        plt.close()
-        #eshow(imap*taper, "tapered")
-        #plt.close()
+        modlmap = kmap.modlmap()
+        power = np.nan_to_num(power)
+        fmap[(modlmap < 100) & (modlmap > 3000)] = 0.
 
-    # compute quantity of interest
+        map_kSZ = enmap.ifft(kmap * (fmap*inv_C_power), normalize="phys").real
+        #map_fltr = (fmap*inv_C_power).real # kSZ filter
+        map_fltr = enmap.ifft((fmap*inv_C_power), normalize="phys").real # GNFW filter
+        
+        print("filtered = ", map_kSZ)
+        print("fitlering = ", map_fltr)
+        print("power = ", power.min(), power.max(), np.sum(np.isnan(power)))
+        print("inverse power = ", np.sum(np.isnan(inv_C_power)), np.min(inv_C_power), np.max(inv_C_power))
+        print("C_ell ell^2", power*modlmap**2)
+        
+        plt.figure(1); plt.title("Power (Fourier)")
+        plt.imshow(np.fft.fftshift(power*modlmap**2))
+
+        plt.figure(2); plt.title("L distance (Fourier)")
+        plt.imshow(np.fft.fftshift(modlmap))
+
+        
+        plt.figure(3); plt.title("Filtering (real)")
+        #plt.imshow(np.fft.fftshift((map_fltr)))
+        plt.imshow(map_fltr) # GNFW filter
+        
+        
+        plt.figure(4); plt.title("Original map (real, tapered)")
+        plt.imshow(imap*taper)
+        
+        plt.figure(5); plt.title("Filtered map (real, tapered)")
+        plt.imshow(map_kSZ)
+
+        plt.show()
+
+    # flatten all Fourier maps
     fmap = fmap.flatten()
     kmap = kmap.flatten()
+    inv_C_power = inv_C_power.flatten()
+    
+    # compute filter C^-1 map / filter C^-1 filter
     #a = np.dot(fmap, np.dot(inv_C_power, kmap))
-    #a /= np.dot(fmap, np.dot(inv_C_power, fmap))
+    #norm = np.dot(fmap, np.dot(inv_C_power, fmap))
     a = np.sum(fmap*inv_C_power*kmap)
     norm = np.sum(fmap*inv_C_power*fmap)
-    norm = np.nan_to_num(norm)
+    assert np.sum(np.isnan(a)) + np.sum(np.isnan(norm)) == 0
     a /= norm
+    #print("a = ", a)
     a = np.real(a)
+
     return a
 
+
+##############################################################################################
+###############             David's functions from 1604.01382            #####################
+##############################################################################################
+from scipy.integrate import quad
+
+def p_M(x, c_500):
+    return np.log(1.+c_500*x) - c_500*x*(1.+c_500*x)
+
+def p_p(x, c_500, alpha, beta, gamma):
+    p_p = (x*c_500)**gamma*(1.+(x*c_500)**alpha)**((beta-gamma)/alpha)
+    p_p = 1./p_p
+    return p_p
+
+def dp_pdx(x, c_500, alpha, beta, gamma):
+    der = ((c_500*x)**(-gamma)*(1 + (c_500*x)**alpha)**(-(alpha + beta - gamma)/alpha)*(-(c_500*x)**alpha*beta - gamma))/x
+    return der
+
+def p_n(x, c_500, alpha, beta, gamma):
+    return -x**2*dp_pdx(x, c_500, alpha, beta, gamma)/p_M(x, c_500)
+
+def integrand_num(x_z, x, c_500, alpha, beta, gamma):
+    return p_n(np.sqrt(x_z**2+x**2), c_500, alpha, beta, gamma)
+
+def integrand_den(x_r, c_500, alpha, beta, gamma):
+    return x_r**2*p_n(x_r, c_500, alpha, beta, gamma)
+
+def g_kSZ(x, c_500, alpha, beta, gamma):
+    num, _ = quad(integrand_num, -np.inf, np.inf, args=(x, c_500, alpha, beta, gamma))
+    den, _ = quad(integrand_den, 0., 1., args=(c_500, alpha, beta, gamma))
+    return num/den
+
+def u_kSZ(theta, theta_500, c_500, alpha, beta, gamma):
+    return g_kSZ(theta/theta_500, c_500, alpha, beta, gamma)/(4.*np.pi*theta_500**2)
+
+if __name__ == "__main__":
+    # constants from paper (ask theta_500 and c_500)
+    theta_500 = 1.8 # arcmin, 2.e13 Msun/h
+    #theta_500 = 2.1 # arcmin, 2.e14 Msun/h
+    alpha = 1.062
+    beta = 5.4807
+    gamma = 0.3292
+    c_500 = 1.156
+
+    # bins array in arcmin
+    thetas = np.linspace(0., 10., 101)
+    thetas = 0.5*(thetas[1:] + thetas[:-1])
+
+    # compute u_kSZ
+    u_kSZs = np.zeros_like(thetas)
+    for i in range(len(thetas)):
+        u_kSZs[i] = u_kSZ(thetas[i], theta_500, c_500, alpha, beta, gamma)
+
+    plt.figure(1)
+    plt.plot(thetas, u_kSZs)
+    plt.xscale('log')
+    plt.yscale('log')
+
+    # fourier
+    N_dim = len(thetas)
+    u_karr = np.fft.fft(u_kSZs)
+    karr = np.fft.fftfreq(N_dim, d=10./(2*np.pi*N_dim))
+    
+    plt.figure(2)
+    plt.plot(karr[karr > 0], np.real(u_karr[karr > 0]))
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.show()
 

@@ -60,9 +60,9 @@ elif cmb_sample == "Planck_healpix":
     
     # power parameters
     LMIN = 0
-    LMAX = 3*nside+1
+    LMAX = 10000 #3*nside+1
     ell_data = np.arange(LMIN, LMAX, 1)
-    ell_data_binned = np.linspace(100, 4000, 400)
+    ell_data_binned = np.linspace(0, 10000, 300)
 
     # compute power spectrum using anafast dividing by fsky
     cmb_masked = mp*msk
@@ -95,6 +95,8 @@ elif cmb_sample == "Planck_healpix":
     # save power
     np.save("camb_data/Planck_power.npy", cl_data)
     np.save("camb_data/Planck_ell.npy", ell_data)
+    np.save("camb_data/Planck_binned_power.npy", cl_data_binned)
+    np.save("camb_data/Planck_centers.npy", ell_data_binned)
     quit()
     
 # reading fits file

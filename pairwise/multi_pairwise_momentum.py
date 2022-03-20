@@ -19,8 +19,9 @@ from classy import Class
 import healpy as hp
 from astropy.coordinates import SkyCoord
 from astropy import units as u
+from scipy import interpolate
 
-from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, tophat_filter, calc_T_MF
+from util import extractStamp, calc_T_AP, eshow, get_tzav_fast, cutoutGeometry, gaussian_filter, tophat_filter, GNFW_filter, kSZ_filter, calc_T_MF
 from estimator import pairwise_momentum
 from numba_2pcf.cf import numba_pairwise_vel#, numba_2pcf
 from tools_pairwise_momentum import get_P_D_A, load_cmb_sample, load_galaxy_sample, get_sdss_lum_lims
@@ -185,7 +186,6 @@ def parallel_aperture_shared(index_range, wcs, RA, DEC, theta_arcmin, rApMaxArcm
         if i % 1000 == 0: print(i)
         T_APs[i] = compute_aperture(new_mp, new_msk, RA[i], DEC[i], theta_arcmin[i], rApMaxArcmin[i], resCutoutArcmin, projCutout, matched_filter=matched_filter, power=power)
 
-
 def parallel_jackknife_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bin, dtype, nthread, n_sample):
     """This function is called in parallel in the different processes. It takes an index range in
     the shared array, and fills in some values there."""
@@ -251,19 +251,17 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
     # file names and power spectrum for matched filter
     if want_MF:
-        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
+        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_index.npy"
         if "DR5" in cmb_sample:
             binned_power = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_binned_power.npy")
             centers = np.load(f"camb_data/{cmb_sample}_{noise_uK:d}uK_centers.npy")
         else:
-            binned_power = np.load(f"camb_data/{cmb_sample}_binned_power.npy")
-            centers = np.load(f"camb_data/{cmb_sample}_centers.npy")
-        power = np.vstack((centers, binned_power)).T
+            binned_power = np.load(f"camb_data/{cmb_sample.split('_healpix')[0]}_binned_power.npy") # since Planck power spectrum 
+            centers = np.load(f"camb_data/{cmb_sample.split('_healpix')[0]}_centers.npy")
     else:
         delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
         index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
-        power = None
         
     # create instance of the class "Class"
     Cosmo = Class()
@@ -382,19 +380,29 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     
         # matched filter or not
         if want_MF:
-            #size_stamp = 15. # arcmin (total length is np.ceil(size_stamp*2*np.sqrt(2)))
-            #theta_arcmin[:] = size_stamp # all cutouts should be that big
             assert vary_Theta == False, "stamps must be same sized" 
             assert np.isclose(np.mean(theta_arcmin), np.max(theta_arcmin)), "stamps must be same sized"
             assert np.isclose(np.mean(theta_arcmin), np.min(theta_arcmin)), "stamps must be same sized"
-            stamp = cutoutGeometry(projCutout=projCutout, rApMaxArcmin=np.mean(theta_arcmin), resCutoutArcmin=resCutoutArcmin)
+
+            # create empty map
+            theta_arcmin[:] = Theta # 15. arcmin (total length is np.ceil(rApMaxArcmin*2*np.sqrt(2)))
+            stamp = cutoutGeometry(projCutout=projCutout, rApMaxArcmin=np.mean(theta_arcmin), resCutoutArcmin=resCutoutArcmin) # const
+
+            # get ell and distance maps
             modlmap = stamp.modlmap()
             modrmap = stamp.modrmap()
+
+            # choose filter
             #fmap = gaussian_filter(modlmap)
-            fmap = tophat_filter(modrmap, np.mean(theta_arcmin))
+            #fmap = tophat_filter(modrmap, np.mean(theta_arcmin)) # constant
+            fmap = GNFW_filter(modrmap, np.mean(theta_arcmin)) # constant
+            #fmap = kSZ_filter(modrmap)
+            power = interpolate.interp1d(centers, binned_power, bounds_error=False, fill_value=None)(modlmap)
+            power[modlmap == 0.] = 0.
         else:
             fmap = None
-
+            power = None
+            
         # parallel computation or not
         if not_parallel:
             # non-parallelized version                
@@ -460,7 +468,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     # define bins in Mpc
     rbins = np.linspace(0., 150., 16) # Mpc
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
-    nthread = 3 #os.cpu_count()//4
+    nthread = 8 #os.cpu_count()//4
     is_log_bin = False
     
     # change dtype to speed up calculation
@@ -501,7 +509,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV_jack.npy", PV_jack)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_PV_jack.npy", PV_jack)
         else:
             np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV_jack.npy", PV_jack)
         np.save(f"data/rbinc.npy", rbinc)
@@ -520,7 +528,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
         else:
             np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
 
@@ -551,7 +559,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
 
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV_boot.npy", PV_boot)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_PV_boot.npy", PV_boot)
         else:
             np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV_boot.npy", PV_boot)
         np.save(f"data/rbinc.npy", rbinc)
@@ -568,9 +576,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         print("calculation took = ", time.time()-t)
         # save arrays
         if want_MF:
-            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
         else:
-            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
+            np.save(f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_{vary_str}Th{Theta:.2f}_PV.npy", PV)
         np.save(f"data/rbinc.npy", rbinc)
 
     # plot pairwise velocity

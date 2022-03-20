@@ -49,20 +49,23 @@ for fn in fns:
     if error_type in ['boot', 'jack']:
         choice = (rbinc < r_max) & (rbinc > r_min)
         PV_cov_red = np.cov(PV_2D[choice, :])
+        #PV_err_red = np.std(PV_2D[choice, :])
+        #PV_err_red = PV_err[choice] # almost same as above
         if error_type == 'jack':
             PV_cov_red *= (n_sample-1.)
-        print("chi2 = ", np.dot(PV_mean[choice], np.dot(np.linalg.inv(PV_cov_red), PV_mean[choice])))
-        print("chi2 diag = ", np.sum(PV_mean[choice]**2./np.diag(PV_cov_red)))
+        print("chi2 = ", np.dot(PV[choice], np.dot(np.linalg.inv(PV_cov_red), PV[choice])))
+        print("chi2 diag = ", np.sum(PV[choice]**2./np.diag(PV_cov_red))) 
+        #print("chi2 diag = ", np.sum((PV[choice]/PV_err_red)**2)) # almost same as above
         print("dof = ", np.sum(choice))
         print("cond number = ", np.linalg.cond(PV_cov_red))
     
     plt.figure(figsize=(9, 7))
-    plt.plot(rbinc, np.zeros(len(PV_mean)), 'k--')
+    plt.plot(rbinc, np.zeros(len(PV)), 'k--')
     plt.errorbar(rbinc, PV, yerr=PV_err, capsize=4.)
     plt.ylabel(r"$\hat p_{kSZ}(r) \ [\mu {\rm K}]$")
     plt.xlabel(r"$r \ [{\rm Mpc}]$")
     #plt.ylim([-0.35, 0.35])
-    plt.ylim([-0.1, 0.1])
+    #plt.ylim([-0.1, 0.1])
     plt.xlim([0., 150.])
     text = " ".join(root.split("_"))
     #plt.text(x=0.03, y=0.1, s=text, transform=plt.gca().transAxes)
