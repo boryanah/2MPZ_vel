@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import interpolate
-from scipy.integrate import dblquad
+from scipy.integrate import dblquad, quad
 
 from pixell import powspec, utils
 import sacc # 0.4.5
@@ -10,8 +10,14 @@ import sacc # 0.4.5
 # load sacc file
 s = sacc.Sacc.load_fits("camb_data/cls_cov_all.fits")
 
+# tracer name
+tracer_name = 'WISE' # 'WISE', 'DELS__0', 'DELS__1', '2MPZ'
+
 # load data
-ell, cl_psi_gal = s.get_ell_cl('cl_00', 'WISE', 'CMBk')
+ell, cl_psi_gal = s.get_ell_cl('cl_00', tracer_name, 'CMBk')
+ell = ell[::2]
+cl_psi_gal = cl_psi_gal[::2]
+ell, cl_psi_gal = ell[ell < 3000], cl_psi_gal[ell < 3000]
 print("ell, psi-gal", ell, cl_psi_gal)
 
 # load power spectrum
@@ -24,15 +30,10 @@ theta_FWHM = 5. # arcmin
 theta_FWHM *= utils.arcmin
 bl_th = np.exp(-0.5*theta_FWHM**2*ell_th**2/(8.*np.log(2.)))
 print("beam = ", bl_th)
-bl_th[0] = 0.
 
 # load filter
-fl_th = np.load("camb_data/Planck_filter_kSZ.npy")
-print("F = ", fl_th)
-
-def f(ell):
-    """ have checked this goes to zero for large ell """
-    return F(ell)/b(ell)
+Fl_th = np.load("camb_data/Planck_filter_kSZ.npy")
+print("F = ", Fl_th)
 
 def L_prime_integrand(L_prime):
     """ also goes to zero """
@@ -43,25 +44,49 @@ def phi_integrand(phi, L_prime, ell):
     return f(argument)*np.cos(phi)
 
 def total_integrand(phi, L_prime, ell):
+    #def total_integrand(L_prime, phi, ell):
+    print(L_prime, phi, ell)
     return L_prime_integrand(L_prime) * phi_integrand(phi, L_prime, ell)
 
 # lensed primary CMB power spectrum
 cl_TT = interpolate.interp1d(ell_th, cl_th, bounds_error=False, fill_value=0.)
 b = interpolate.interp1d(ell_th, bl_th, bounds_error=False, fill_value=0.)
-F = interpolate.interp1d(ell_th, fl_th, bounds_error=False, fill_value=0.)
+fl_th = Fl_th/bl_th
+fl_th[bl_th ==  0.] = 0.
+fl_th /= np.max(fl_th)
+f = interpolate.interp1d(ell_th, fl_th, bounds_error=False, fill_value=0.)
 
 # compute integral
+L_primes = np.linspace(0., 3000., 300)
+integral = np.zeros(len(ell))
+for i in range(len(ell)):
+    vals = np.zeros(len(L_primes))
+    for j in range(len(L_primes)):
+        res, err = quad(phi_integrand, 0., 2.*np.pi, args=(L_primes[j], ell[i]))
+        vals[j] = res
+    phi_integral = interpolate.interp1d(L_primes, vals, bounds_error=False, fill_value=0.)
+    def final_integrand(L_prime):
+        return L_prime_integrand(L_prime) * phi_integral(L_prime)
+    res, err = quad(final_integrand, 0., np.inf)
+    print(res, err, i, len(ell))
+    integral[i] = res
+"""
 integral = np.zeros(len(ell))
 for i in range(len(ell)):
     res, err = dblquad(total_integrand, 0., 2.*np.pi, 0., np.inf, args=(ell[i],))
     print(res, err)
     integral[i] = res
 print(integral)
-    
+"""
+
 # compute lensing contamination
 lens_contam = -2. * ell * cl_psi_gal/(2.*np.pi)**2 * integral
+# assuming David has shared convergence rather than psi (kappa=-1/2 nabla^2phi)
+lens_contam /= (0.5*ell*(ell+1))
+np.save(f"camb_data/lensing_contribution_{tracer_name}.npy", lens_contam)
 
 plt.figure(1)
+plt.plot(ell, np.zeros_like(ell), color='black', ls='--')
 plt.plot(ell, lens_contam*ell**2)
 plt.xlim([0, 3000])
 plt.show()
