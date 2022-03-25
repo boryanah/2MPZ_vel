@@ -1,3 +1,7 @@
+"""
+Script for computing lensing contribution to kSZ^2 galaxy signal
+"""
+import os
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,12 +15,11 @@ import sacc # 0.4.5
 s = sacc.Sacc.load_fits("camb_data/cls_cov_all.fits")
 
 # tracer name
-tracer_name = 'WISE' # 'WISE', 'DELS__0', 'DELS__1', '2MPZ'
+tracer_name = 'DELS__1' # 'WISE', 'DELS__0' (3D: 0, 0.8), 'DELS__1' (all), '2MPZ'
 
 # load data
 ell, cl_psi_gal = s.get_ell_cl('cl_00', tracer_name, 'CMBk')
-ell = ell[::2]
-cl_psi_gal = cl_psi_gal[::2]
+ell, cl_psi_gal = ell[::2], cl_psi_gal[::2]
 ell, cl_psi_gal = ell[ell < 3000], cl_psi_gal[ell < 3000]
 print("ell, psi-gal", ell, cl_psi_gal)
 
@@ -56,28 +59,33 @@ fl_th[bl_th ==  0.] = 0.
 fl_th /= np.max(fl_th)
 f = interpolate.interp1d(ell_th, fl_th, bounds_error=False, fill_value=0.)
 
-# compute integral
-L_primes = np.linspace(0., 3000., 300)
-integral = np.zeros(len(ell))
-for i in range(len(ell)):
-    vals = np.zeros(len(L_primes))
-    for j in range(len(L_primes)):
-        res, err = quad(phi_integrand, 0., 2.*np.pi, args=(L_primes[j], ell[i]))
-        vals[j] = res
-    phi_integral = interpolate.interp1d(L_primes, vals, bounds_error=False, fill_value=0.)
-    def final_integrand(L_prime):
-        return L_prime_integrand(L_prime) * phi_integral(L_prime)
-    res, err = quad(final_integrand, 0., np.inf)
-    print(res, err, i, len(ell))
-    integral[i] = res
-"""
-integral = np.zeros(len(ell))
-for i in range(len(ell)):
-    res, err = dblquad(total_integrand, 0., 2.*np.pi, 0., np.inf, args=(ell[i],))
-    print(res, err)
-    integral[i] = res
-print(integral)
-"""
+if not os.path.exists("camb_data/lensing_contribution_integral.npy"):
+    # compute integral
+    #L_primes = np.linspace(0., 3000., 300)
+    L_primes = np.arange(3000)
+    integral = np.zeros(len(ell))
+    for i in range(len(ell)):
+        vals = np.zeros(len(L_primes))
+        for j in range(len(L_primes)):
+            res, err = quad(phi_integrand, 0., 2.*np.pi, args=(L_primes[j], ell[i]))
+            vals[j] = res
+        phi_integral = interpolate.interp1d(L_primes, vals, bounds_error=False, fill_value=0.)
+        def final_integrand(L_prime):
+            return L_prime_integrand(L_prime) * phi_integral(L_prime)
+        res, err = quad(final_integrand, 0., np.inf)
+        print(res, err, i, len(ell))
+        integral[i] = res
+    """
+    integral = np.zeros(len(ell))
+    for i in range(len(ell)):
+        res, err = dblquad(total_integrand, 0., 2.*np.pi, 0., np.inf, args=(ell[i],))
+        print(res, err)
+        integral[i] = res
+    print(integral)
+    """
+    np.save("camb_data/lensing_contribution_integral.npy", integral)
+else:
+    integral = np.load("camb_data/lensing_contribution_integral.npy")
 
 # compute lensing contamination
 lens_contam = -2. * ell * cl_psi_gal/(2.*np.pi)**2 * integral
