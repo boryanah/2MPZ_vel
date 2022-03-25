@@ -60,7 +60,7 @@ elif cmb_sample == "Planck_healpix":
     
     # power parameters
     LMIN = 0
-    LMAX = 10000 #3*nside+1
+    LMAX = 3*nside+1
     ell_data = np.arange(LMIN, LMAX, 1)
     ell_data_binned = np.linspace(0, 10000, 300)
 
@@ -74,6 +74,7 @@ elif cmb_sample == "Planck_healpix":
 
     # bin power spectrum
     ell_data_binned, cl_data_binned = bin_mat(ell_data, cl_data, ell_data_binned)
+    print("ell, cl = ", ell_data_binned, cl_data_binned)
     
     # load cmb power from theory
     camb_theory = powspec.read_spectrum("camb_data/camb_theory.dat", scale=True) # scaled by 2pi/l/(l+1) to get C_ell

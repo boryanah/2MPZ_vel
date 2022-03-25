@@ -1,5 +1,6 @@
 import glob
 import sys
+import os
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,10 +9,15 @@ import plotparams
 plotparams.buba()
 
 root = f"{sys.argv[1]:s}"
+if "-1" == root:
+    files = glob.glob("data/*PV_boot.npy")
+    files.sort(key=os.path.getmtime)
+    root = files[-1].split('data/')[-1]
 if '.npy' in root:
     root = root.split('.npy')[0]
+print(root)
 fns = glob.glob(f"data/{root:s}.npy")
-r_max = 80. #60. #80.
+r_max = 70. #60. #80.
 r_min = 20. #0. #20.
 
 for fn in fns:
