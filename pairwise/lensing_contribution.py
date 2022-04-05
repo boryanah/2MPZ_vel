@@ -15,13 +15,13 @@ import sacc # 0.4.5
 s = sacc.Sacc.load_fits("camb_data/cls_cov_all.fits")
 
 # tracer name
-tracer_name = 'DELS__1' # 'WISE', 'DELS__0' (3D: 0, 0.8), 'DELS__1' (all), '2MPZ'
+tracer_name = 'WISE' # 'WISE', 'DELS__0' (3D: 0, 0.8), 'DELS__1' (all), '2MPZ'
 
 # load data
-ell, cl_psi_gal = s.get_ell_cl('cl_00', tracer_name, 'CMBk')
+ell, cl_psi_gal = s.get_ell_cl('cl_00', tracer_name, 'CMBk') # galaxies x convergence
 ell, cl_psi_gal = ell[::2], cl_psi_gal[::2]
-ell, cl_psi_gal = ell[ell < 3000], cl_psi_gal[ell < 3000]
-print("ell, psi-gal", ell, cl_psi_gal)
+ell, cl_psi_gal = ell[ell < 5000], cl_psi_gal[ell < 5000]
+print("ell, kappa-gal", ell, cl_psi_gal)
 
 # load power spectrum
 camb_theory = powspec.read_spectrum("camb_data/camb_theory.dat", scale=True) # scaled by 2pi/l/(l+1) to get C_ell
@@ -54,14 +54,14 @@ def total_integrand(phi, L_prime, ell):
 # lensed primary CMB power spectrum
 cl_TT = interpolate.interp1d(ell_th, cl_th, bounds_error=False, fill_value=0.)
 b = interpolate.interp1d(ell_th, bl_th, bounds_error=False, fill_value=0.)
-fl_th = Fl_th/bl_th
+fl_th = Fl_th*bl_th
 fl_th[bl_th ==  0.] = 0.
 fl_th /= np.max(fl_th)
 f = interpolate.interp1d(ell_th, fl_th, bounds_error=False, fill_value=0.)
 
 if not os.path.exists("camb_data/lensing_contribution_integral.npy"):
     # compute integral
-    #L_primes = np.linspace(0., 3000., 300)
+    #L_primes = np.linspace(0., 3000., 100)
     L_primes = np.arange(3000)
     integral = np.zeros(len(ell))
     for i in range(len(ell)):
@@ -91,13 +91,18 @@ else:
 lens_contam = -2. * ell * cl_psi_gal/(2.*np.pi)**2 * integral
 # assuming David has shared convergence rather than psi (kappa=-1/2 nabla^2phi)
 lens_contam /= (0.5*ell*(ell+1))
-np.save(f"camb_data/lensing_contribution_{tracer_name}.npy", lens_contam)
+np.savez(f"camb_data/lensing_contribution_{tracer_name}", lensing_contribution=lens_contam, ell=ell)
 
 plt.figure(1)
 plt.plot(ell, np.zeros_like(ell), color='black', ls='--')
 plt.plot(ell, lens_contam*ell**2)
 plt.xlim([0, 3000])
+
+plt.figure(2)
+plt.plot(ell, cl_psi_gal)
+plt.yscale('log')
 plt.show()
+
 
 #s.tracers
 #{'WISE': <sacc.tracers.MapTracer object at 0x7f713ddcec90>, 'CMBk': <sacc.tracers.MapTracer object at 0x7f713ddba050>, 'DELS__0': <sacc.tracers.NZTracer object at 0x7f713e566050>, 'DELS__1': <sacc.tracers.NZTracer object at 0x7f713ddd3090>, '2MPZ': <sacc.tracers.NZTracer object at 0x7f713ddd3310>}

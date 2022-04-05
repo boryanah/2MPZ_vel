@@ -57,7 +57,9 @@ def main(galaxy_sample):
     rot = (0., 0., 0.)
     
     # load map and mask
-    mp_fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits"
+    #mp_fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits"
+    #mp_fn = data_dir+"/cmb_data/COM_CMB_IQU-smica-nosz_2048_R3.00_full.fits"
+    mp_fn = data_dir+"/cmb_data/dust/COM_CMB_IQU-smica-nosz-nodust_2048_R3.00_full.fits"
     msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_Gal70.fits"
     #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_Gal60.fits" # TESTING
     mp = hp.read_map(mp_fn, verbose=True)

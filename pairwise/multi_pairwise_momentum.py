@@ -229,7 +229,7 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_boot[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, mask_type, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False):
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, mask_type, lum_weight=False, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False):
     print(f"Producing: {galaxy_sample}_{cmb_sample}")
     vary_str = "vary" if vary_Theta else "fixed"
     MF_str = "MF" if want_MF else ""
@@ -287,7 +287,20 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         print("cmb bounds = ", cmb_box.items())
 
     # load galaxies
-    RA, DEC, Z, index = load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random)
+    if lum_weight:
+        RA, DEC, Z, index, lum = load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random, lum_weight=True)
+    else:
+        RA, DEC, Z, index = load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random)
+
+    """
+    # compute the aperture photometry for each galaxy
+    r = 2. * utils.arcmin
+    srcs = ([DEC*utils.degree, RA*utils.degree])
+    mask = enmap.distance_from(mp.shape, mp.wcs, srcs, rmax=r) >= r
+    eshow(mask, f'{galaxy_sample}_{cmb_sample}_galaxies', **{"colorbar":True, "ticks": 5, "downgrade": 4})
+    plt.close()
+    quit()
+    """
     
     # get cartesian coordinates and angular size distance
     P, D_A = get_P_D_A(Cosmo, RA, DEC, Z)
@@ -314,6 +327,8 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         DEC = DEC[choice]
         Z = Z[choice]
         P = P[choice]
+        if lum_weight:
+            lum = lum[choice]
         print("number after premasking = ", len(RA))
 
     # if files don't exist, need to compute
@@ -323,6 +338,15 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         choice = np.in1d(index, index_new)
         Z = Z[choice]
         P = P[choice]
+        if lum_weight:
+            lum = lum[choice]
+
+        # TESTING!!!!!!!!!!!!!!!!!!!!
+        #choice = np.abs(delta_Ts) > 5.
+        #delta_Ts = delta_Ts[choice]
+        #Z = Z[choice]
+        #P = P[choice]
+        #print("bigger than abs 10 = ", np.sum(choice))
     else:
         # size of the clusters and median redshift
         zmed = np.median(Z)
@@ -374,7 +398,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             DEC = DEC[premask]
             P = P[premask]
             Z = Z[premask]
-            #msk = msk*0. + 1. # from now on, no more masking # TESTING
+            if lum_weight:
+                lum = lum[premask]
+            msk = msk*0. + 1. # from now on, no more masking # TESTING!!!!!
             print("number of galaxies (after premasking) = ", len(RA))
             del premask, xpix, ypix, inside
     
@@ -451,8 +477,10 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         index = index[choice]
         Z = Z[choice]
         P = P[choice]
+        if lum_weight:
+            lum = lum[choice]
         print("percentage T_APs == 0. ", np.sum(~choice)*100./len(RA))
-
+        
         # get the redshift-weighted apertures and temperature decrement around each galaxy
         bar_T_APs = get_tzav_fast(T_APs, Z, sigma_z)
         delta_Ts = T_APs - bar_T_APs
@@ -470,6 +498,9 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
     rbinc = (rbins[1:]+rbins[:-1])*.5 # Mpc
     nthread = 8 #os.cpu_count()//4
     is_log_bin = False
+
+    if lum_weight:
+        delta_Ts *= lum/np.sum(lum)
     
     # change dtype to speed up calculation
     dtype = np.float32
@@ -616,6 +647,7 @@ if __name__ == "__main__":
     parser.add_argument('--want_plot', '-plot', help='Plot the final pairwise momentum function', action='store_true')
     parser.add_argument('--want_MF', '-MF', help='Want to use matched filter', action='store_true')
     parser.add_argument('--want_random', '-rand', help='Random seed to shuffle galaxy positions (-1 does not randomize)', type=int, default=-1)
+    parser.add_argument('--lum_weight', '-lum', help='Luminosity weighting of the temperature decrements', action='store_true')
     parser.add_argument('--want_premask', '-mask', help='Mask galaxies with CMB mask before taking temperature decrements', action='store_true')
     parser.add_argument('--mask_type', '-mtype', help='Type of CMB mask to apply', choices=['', 'mtype0', 'mtype1', 'mtype2', 'mtype3', 'mtype4', 'mtype5'], default=DEFAULTS['mask_type'])
     parser.add_argument('--not_parallel', help='Do serial computation of aperture rather than parallel', action='store_true')

@@ -71,9 +71,11 @@ gal_mass = SubhaloMstar[gal_inds]
 gal_ssfr = SubhalosSFR[gal_inds]
 
 par_r200 = Group_R_TopHat200[gal_inds]
+par_m200 = Group_M_TopHat200[gal_inds]
 par_r200 /= h #cMpc
 print("redshift = ", z )
 print("median and mean r200 [cMpc] = ", np.median(par_r200), np.mean(par_r200)) # 0.068, 0.082
+print("median and mean m200 [Msun/h] = ", np.median(par_m200), np.mean(par_m200)) # 0.068, 0.082
 print("median and mean r200 [Mpc] = ", np.median(par_r200)*1./(1+z), np.mean(par_r200)*1./(1+z)) 
 quit()
 rbins = np.geomspace(0.01, par_r200.max(), 51)
