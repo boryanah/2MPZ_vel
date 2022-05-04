@@ -229,7 +229,7 @@ def parallel_bootstrap_pairwise(index_range, inds, P, delta_Ts, rbins, is_log_bi
         print("bootstrap sample took = ", i, time.time()-t1)
         PV_boot[:, i] = PV
 
-def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, mask_type, lum_weight=False, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False):
+def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_sample, data_dir, Theta, mask_type, lum_weight=False, vary_Theta=False, want_plot=False, want_MF=False, want_random=-1, want_premask=False, not_parallel=False, force=False):
     print(f"Producing: {galaxy_sample}_{cmb_sample}")
     vary_str = "vary" if vary_Theta else "fixed"
     MF_str = "MF" if want_MF else ""
@@ -332,7 +332,7 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
         print("number after premasking = ", len(RA))
 
     # if files don't exist, need to compute
-    if os.path.exists(delta_T_fn) and os.path.exists(index_fn):
+    if os.path.exists(delta_T_fn) and os.path.exists(index_fn) and not force:
         delta_Ts = np.load(delta_T_fn)
         index_new = np.load(index_fn)
         choice = np.in1d(index, index_new)
@@ -354,6 +354,8 @@ def main(galaxy_sample, cmb_sample, resCutoutArcmin, projCutout, want_error, n_s
             goal_size = 1.1 # Mpc (comoving)
         elif "2MPZ" in galaxy_sample:
             goal_size = 0.5 # Mpc (comoving) 0.5 or 0.6 or 0.792 see target.py in hydro_tests/
+        elif "MGS" == galaxy_sample:
+            goal_size = 1. # Mpc (comoving)
         goal_size *= 1./(1+zmed) # Mpc (proper)
         sigma_z = 0.01
         print("median redshift = ", zmed)
@@ -633,7 +635,7 @@ if __name__ == "__main__":
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
                         choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D", "2MPZ_Biteau",
-                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC"])
+                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "MGS", "eBOSS_SGC", "eBOSS_NGC"])
     parser.add_argument('--cmb_sample', '-cmb', help='Which CMB sample do you want to use?',
                         default=DEFAULTS['cmb_sample'],
                         choices=["ACT_BN", "ACT_D56", "ACT_DR5_f090", "ACT_DR5_f150", "Planck", "Planck_healpix"])
@@ -651,6 +653,7 @@ if __name__ == "__main__":
     parser.add_argument('--want_premask', '-mask', help='Mask galaxies with CMB mask before taking temperature decrements', action='store_true')
     parser.add_argument('--mask_type', '-mtype', help='Type of CMB mask to apply', choices=['', 'mtype0', 'mtype1', 'mtype2', 'mtype3', 'mtype4', 'mtype5'], default=DEFAULTS['mask_type'])
     parser.add_argument('--not_parallel', help='Do serial computation of aperture rather than parallel', action='store_true')
+    parser.add_argument('--force', help='Run even if AP/MF files exist', action='store_true')
     args = vars(parser.parse_args())
 
     main(**args)
