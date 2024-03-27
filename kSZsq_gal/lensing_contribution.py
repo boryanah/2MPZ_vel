@@ -26,14 +26,14 @@ Fl_th = Fl_th / np.amax(Fl_th)
 Fl = interp1d(ell, Fl_th, bounds_error=False, fill_value=0)
 
 # tracer name
-tracer_name = 'DELS__1' # 'WISE', 'DELS__0' (3D: 0, 0.8), 'DELS__1' (all), '2MPZ'
+tracer_name = 'WISE' #'DELS__1' # 'WISE', 'DELS__0' (3D: 0, 0.8), 'DELS__1' (all), '2MPZ'
 
 def fl(l):
     return Fl(l)*bl(l)
 
 # plot filter
-plt.plot(ell, fl(ell))
-plt.show()
+#plt.plot(ell, fl(ell))
+#plt.show()
 
 # inner integral
 def integ_inner(l, L, nphi=64):
@@ -72,12 +72,12 @@ if not os.path.exists("data_lensing/lensing_contribution_integral.npy"):
 else:
     I1 = np.load("data_lensing/lensing_contribution_integral.npy")
 
-# TESTING!!!!!!!!!!!!!!!!!
+# TESTING!!!!!!!!!!!!!!!!! (save ls1 elsewhere)
 ls1 = np.linspace(0, 10000, 256)
-plt.plot(ls1, I1, 'k-')
+#plt.plot(ls1, I1, 'k-')
 #plt.plot(ls2, I2, 'r--')
 #plt.plot(ls3, I3, 'y:')
-plt.show()
+#plt.show()
 
 # read cross-correlation power spectrum and fit a polynomial to it (in log-log)
 import sacc
@@ -85,9 +85,16 @@ import sacc
 # read file
 s = sacc.Sacc.load_fits('data_lensing/cls_cov_all.fits')
 l_s, cl_s, cov_s = s.get_ell_cl('cl_00', tracer_name, 'CMBk', return_cov=True)
+
+# TESTING!!!!!!!!!!!!!!!!!!!!!!
+#data = np.load(f"kszsq_gal_data/cl_kappa_gal_{tracer_name}.npz")
+#cl_s = data['cl_kappa_gal_binned']
+#l_s = data['ell_binned']
+
 err_s = np.sqrt(np.diag(cov_s))
 err_s[0] = err_s[1]
-coeffs = np.polyfit(np.log(l_s[:-2]), np.log(cl_s[:-2]), w=1/err_s[:-2], deg=6)
+coeffs = np.polyfit(np.log(l_s[:-2]), np.log(cl_s[:-2]), w=1/err_s[:-2], deg=6) # og
+#coeffs = np.polyfit(np.log(l_s[0:-5]), np.log(cl_s[0:-5]), w=1/err_s[0:-5], deg=3) # TESTING
 
 def cl_s_fit(ls):
     poly = np.poly1d(coeffs)

@@ -9,12 +9,30 @@ import matplotlib.pyplot as plt
 import healpy as hp
 from pixell import enmap, enplot, utils, reproject
 from classy import Class
+import fitsio
+from astropy.table import Table
 from astropy.io import fits
 from astropy.io import ascii
 from astropy import units as u
 from astropy.coordinates import SkyCoord
+from astropy.cosmology import Planck13
+from scipy.interpolate import interp1d
+from colossus.lss import bias
 
 from util import eshow
+
+
+# physics constants in cgs
+m_p = 1.6726e-24 # g
+X_H = 0.76 # unitless
+sigma_T = 6.6524587158e-25 # cm^2
+m_e = 9.10938356e-28 # g
+c = 29979245800. # cm/s
+kpc_to_cm = ((1.*u.kpc).to(u.cm)).value # cm
+Mpc_to_cm = kpc_to_cm*1000. # 3.086e+24 cm
+solar_mass = 1.989e33 # g
+sigma_T_over_m_p = sigma_T / m_p
+solar_mass_over_Mpc_to_cm_squared = solar_mass/Mpc_to_cm**2
 
 def get_P_D_A(Cosmo, RA, DEC, Z):
     # transform to cartesian coordinates (checked)
@@ -52,15 +70,19 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
     elif cmb_sample == "ACT_DR5_f150":
         fn = data_dir+"/cmb_data/act_planck_dr5.01_s08s18_AA_f150_daynight_map.fits" # DR5 f150
         msk_fn = data_dir+f"/cmb_data/comb_mask_ACT_DR5_f150_ivar_{noise_uK:d}uK_ps_{source_arcmin:.1f}arcmin.fits"
+    elif cmb_sample == "ACT_DR6":
+        fn = data_dir+"/cmb_data/hilc_fullRes_TT_17000.fits" # DR6 Harmonic ILC 1.6 arcmin
+        msk_fn = data_dir+f"cmb_data/wide_mask_GAL070_apod_1.50_deg_wExtended_srcfree_Will.fits"
+        #msk_fn = data_dir+f"cmb_data/wide_mask_GAL070_apod_1.50_deg_wExtended_srcfree_Pato.fits" # more permissive but worse performance somehow
     elif cmb_sample == "Planck":
-        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits" # pixell (because "Planck_")
-        #fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits" # hp
-        #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00.fits" # point sources hp
-        msk_fn = data_dir+"/cmb_data/Planck_HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00_uK.fits" # combined
-        #msk_fn = data_dir+f"/cmb_data/ps_mask_Planck_{source_arcmin:.1f}arcmin.fits"
+        fn = data_dir+"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits" # pixell (because "Planck_"), equatorial
+        msk_fn = data_dir+"/cmb_data/Planck_HFI_Mask_PointSrc_Gal70.fits" # combined pixell, equatorial
+        #fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits" # healpy (because no "Planck_"), galactic
+        #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_Gal70.fits" # combined healpy (equatorial), galactic
+        #msk_fn = data_dir+"/cmb_data/HFI_Mask_PointSrc_Gal70_equatorial.fits" # combined healpy, equatorial
         
     """
-    # generate Planck map
+    # generate Planck map in pixell format
     res_arcmin = 0.5
     DEC_center, RA_center = 0., 0.
     nx = int(180./(res_arcmin/60.)) # DEC
@@ -68,13 +90,13 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
     print("nx, ny = ", nx, ny)
     shape, wcs = enmap.geometry(shape=(nx, ny), res=res_arcmin*utils.arcmin, pos=(DEC_center, RA_center))
     #mp = reproject.enmap_from_healpix(fn, shape, wcs, ncomp=1, unit=1.e-6, lmax=6000, rot="gal,equ")
-    mp = reproject.enmap_from_healpix(msk_fn, shape, wcs, ncomp=1, unit=1.e-6, lmax=6000, rot="gal,equ")
-    mp = mp.astype(np.float32)
-    print("pshape, pwcs = ", mp.shape, mp.wcs)
-    print("box = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
-    print("pbox = ", enmap.box(mp.shape, mp.wcs)/utils.degree)
+    msk = hp.read_map(msk_fn)
+    msk = reproject.enmap_from_healpix_interp(msk, shape, wcs, interpolate=False, rot=None) # if already in equatorial, rot=None
+    #msk = mp.astype(np.float32)
+    print("shape, wcs = ", shape, wcs)
+    print("box = ", enmap.box(shape, wcs)/utils.degree)
     #enmap.write_fits(data_dir+f"/cmb_data/Planck_COM_CMB_IQU-smica_2048_R3.00_uK.fits", mp)
-    enmap.write_fits(data_dir+f"/cmb_data/Planck_HFI_Mask_PointSrc_all_GalPlane-apo0_2048_R2.00_uK.fits", mp)
+    enmap.write_fits(data_dir+f"/cmb_data/Planck_HFI_Mask_PointSrc_Gal70.fits", msk)
     """
     
     # reading fits file
@@ -92,10 +114,11 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         msk = enmap.read_fits(msk_fn)
         
     if "Planck" in cmb_sample:
-        msk = msk[0] # saved as (1, 10800, 21600)
+        #msk = msk[0] # saved as (1, 10800, 21600)
         msk[msk < 0.5] = 0.
         msk[msk >= 0.5] = 1.
-    print("fsky", np.sum(np.isclose(msk, 0.))/np.product(msk.shape), msk.shape, msk.min(), msk.max(), msk.mean())
+        print(msk.shape)
+    print("fsky, msk min, max, mean = ", np.sum(np.isclose(msk, 1.))/np.product(msk.shape), msk.shape, msk.min(), msk.max(), msk.mean())
     
     # save map
     if save:
@@ -107,7 +130,7 @@ def load_cmb_sample(cmb_sample, data_dir, source_arcmin, noise_uK, save=False):
         plt.close()
     return mp, msk
 
-def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random, return_mask=False):
+def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want_random, return_mask=False, return_bias=False, return_tau=False, return_asymm=-1):
 
     # filename of galaxy map
     if galaxy_sample == "2MPZ":
@@ -135,7 +158,24 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         gal_fn = data_dir+"/eboss_data/eBOSS_ELG_clustering_data-NGC-vDR16.fits"
     elif "SDSS" in galaxy_sample:
         gal_fn = data_dir+"/sdss_data/V21_DR15_Catalog_v4.txt"
-    
+    elif "MGS" == galaxy_sample:
+        kcorr_fn = data_dir+"/sdss_data/kcorrect.nearest.petro.z0.10.fits"
+        gal_fn = data_dir+"/sdss_data/post_catalog.dr72bright0.fits"
+        bias_fn = data_dir+"/sdss_data/bias_dr72bright0.npz"
+    elif "MGS_grp" == galaxy_sample:
+        gal_fn = data_dir+"/sdss_data/sdss_kdgroups_v1.0.dat"
+        #mask_fn = data_dir+"/sdss_data/mask_sdss_kdgroups_v1.0.fits"
+    elif "BGS" == galaxy_sample:
+        #gal_fn = data_dir+"/bgs_data/BGS_BRIGHT_full_lensing.dat.fits"
+        #gal_fn = data_dir+"/bgs_data/BGS_BRIGHT_full_noveto_vac.dat.fits"
+        gal_fn = data_dir+"/bgs_data/BGS_BRIGHT_full_noveto_vac_marvin.dat.fits"
+    elif "MGS_BGS" == galaxy_sample:
+        kcorr_fn = data_dir+"/sdss_data/kcorrect.nearest.petro.z0.10.fits"
+        gal_fn1 = data_dir+"/sdss_data/post_catalog.dr72bright0.fits"
+        bias_fn = data_dir+"/sdss_data/bias_dr72bright0.npz"
+        #gal_fn2 = data_dir+"/bgs_data/BGS_BRIGHT_full_lensing.dat.fits"
+        gal_fn2 = data_dir+"/bgs_data/BGS_BRIGHT_full_noveto_vac.dat.fits"
+        
     # load galaxy sample
     if galaxy_sample == '2MPZ':
         hdul = fits.open(gal_fn)
@@ -144,12 +184,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         print("DEC min/max", DEC.min(), DEC.max())
         ZPHOTO = hdul[1].data['ZPHOTO'].flatten()
         ZSPEC = hdul[1].data['ZSPEC'].flatten()
-        """
-        plt.figure(figsize=(9, 7))
-        plt.plot([ZPHOTO.min(), ZPHOTO.max()], [ZPHOTO.min(), ZPHOTO.max()], ls='--', lw=3, color='black')
-        plt.scatter(ZSPEC[ZSPEC > 0.], ZPHOTO[ZSPEC > 0.], marker='x', color='red', s=5)
-        plt.show()
-        """
+        
         #mode = "ZPHOTO"
         #mode = "ZSPEC" # complete for K < 11.65
         mode = "ZMIX"
@@ -170,6 +205,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             Z = np.repeat(Z, factor)
             K_rel = np.repeat(K_rel, factor)
             """
+            # another version
             RA = np.repeat(RA, factor)
             DEC = np.repeat(DEC, factor)
             inds_ra = np.arange(len(RA), dtype=int)
@@ -190,12 +226,13 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
             L = c_icrs.galactic.l.value
 
         #choice = (K_rel < 13.9) & (Z > 0.0) # original is 13.9
-        #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.3)  # original is 13.9
+        choice = (K_rel < 13.9) & (Z > 0.02) & (Z < 0.35)  # original is 13.9
         #choice = (K_rel < 13.9) & (Z > 0.0) & (Z < 0.0773)
-        choice = (K_rel < 13.9) & (Z > 0.0)
+        #choice = (K_rel < 13.9) & (Z > 0.0)
         #choice = (K_rel < 11.65) & (Z > 0.0) & (Z < 0.3)
         #choice = (K_rel < 13.9) & (Z < 0.15); Z[Z < 0.] = 0.
-        
+
+        # make a cut in luminosity
         lum_cut = True
         if lum_cut:
             K_abs = np.zeros_like(K_rel)+100. # make it faint
@@ -205,11 +242,14 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
                 E_z = Z[i]
                 K_z = -6.*np.log10(1. + Z[i])
                 K_abs[i] = K_rel[i] - 5.*np.log10(lum_dist) - 25. + K_z + E_z
-            K_perc = np.percentile(K_abs, 40.)#33.)
+            K_perc = np.percentile(K_abs, 40.) #33.)
             print(K_abs.min(), K_perc, K_abs.max())
             
             choice &= (K_abs < K_perc)
-        
+            if return_tau:
+                K_abs = K_abs[choice]
+                tau = 10.**(0.4*(0.-K_abs))
+                
         # apply 2MPZ mask
         B *= utils.degree
         L *= utils.degree
@@ -221,6 +261,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         nside = hp.npix2nside(npix)
         ipix = hp.pixelfunc.vec2pix(nside, x, y, z)
         choice &= mask[ipix] == 1.
+        
     elif '2MPZ_Biteau' == galaxy_sample:
         data = np.load(gal_fn)
         RA = data['RA']
@@ -253,7 +294,7 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         if mass_cut:
             Mstar_perc = np.percentile(Mstar, 30.)
             print("Mstar threshold = ", Mstar_perc)
-            Mstar_perc = 10.3 # TESTING
+            Mstar_perc = 10.3 
             print("Mstar threshold = ", Mstar_perc)
             choice &= (Mstar > Mstar_perc)
         #dL_max = 350. # Mpc sample complete 0.0773
@@ -263,7 +304,6 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         print("d_L min/max = ", dL_min, dL_max)
         choice &= (d_L < dL_max) & (d_L > dL_min)
         
-        # could add mask
     elif galaxy_sample == 'WISExSCOS':
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten()/utils.degree # 0, 360
@@ -290,14 +330,18 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         hdul = fits.open(gal_fn1)
         RA = hdul[1].data['RA'].flatten() # 0, 360
         DEC = hdul[1].data['DEC'].flatten() # -90, 90
-        Z = hdul[1].data['PHOTOZ_3DINFER'].flatten()
-
+        #Z = hdul[1].data['PHOTOZ_3DINFER'].flatten() # many negative - bad signal
+        Z = hdul[1].data['PHOTOZ_ZHOU'].flatten() # few negative - better signal
+        
         hdul = fits.open(gal_fn2)
         RA = np.hstack((RA, hdul[1].data['RA'].flatten())) # 0, 360
         DEC = np.hstack((DEC, hdul[1].data['DEC'].flatten())) # -90, 90
-        Z = np.hstack((Z, hdul[1].data['PHOTOZ_3DINFER'].flatten()))
+        #Z = np.hstack((Z, hdul[1].data['PHOTOZ_3DINFER'].flatten()))
+        Z = np.hstack((Z, hdul[1].data['PHOTOZ_ZHOU'].flatten()))
         
-        choice = np.ones(len(Z), dtype=bool)
+        choice = np.ones(len(Z), dtype=bool) # DELS__1 (all galaxies)
+        #choice = (Z > 0.0) & (Z < 0.8) # DELS__0 if 3DINFER
+        #choice = (Z > 0.)
         
         c_icrs = SkyCoord(ra=RA*u.degree, dec=DEC*u.degree, frame='icrs') # checked
         B = c_icrs.galactic.b.value
@@ -316,39 +360,220 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
         choice &= mask[ipix] == 1.
         print("DEC min/max", DEC.min(), DEC.max())
         print("RA min/max", RA.min(), RA.max())
-        
+
     elif 'BOSS' in galaxy_sample:
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten() # 0, 360
         DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 36
         Z = hdul[1].data['Z'].flatten()
         choice = np.ones(len(Z), dtype=bool)
+        
     elif 'eBOSS' in galaxy_sample:
         hdul = fits.open(gal_fn)
         RA = hdul[1].data['RA'].flatten() # 0, 360
         DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 36
         Z = hdul[1].data['Z'].flatten()
         choice = np.ones(len(Z), dtype=bool)
+        
     elif 'SDSS' in galaxy_sample:
         data = ascii.read(gal_fn)
         RA = data['ra'] # 0, 360
         DEC = data['dec'] # -90, 90 # -10, 36
         Z = data['z']
-        L = data['lum']
+        lum = data['lum']
+        stellarmasses = data['stellarmasses']
+        halomasses = data['halomasses']
+
+        # test if one or two samples
+        splits = galaxy_sample.split('_')
         L_lo, L_hi = get_sdss_lum_lims(galaxy_sample)
-        choice = (L_lo < L) & (L_hi >= L)
+        if return_asymm >= 0:
+            if len(splits) == 2:
+                L_lo_asymm, L_hi_asymm = get_sdss_lum_lims('_'.join([splits[0], splits[1]]))
+            else:
+                L_lo_asymm, L_hi_asymm = get_sdss_lum_lims('_'.join([splits[0], splits[2]]))
+        choice = (L_lo < lum) & (L_hi >= lum)
         if "ACT_BN" in cmb_sample or "ACT_D56" in cmb_sample:
             choice &= data['S16ILC'] == 1.
         elif "ACT_DR5_f090" in cmb_sample or "ACT_DR5_f150" in cmb_sample:
             choice &= data['S18coadd'] == 1.
-        print("galaxies satisfying luminosty cut = ", np.sum(choice))
+        print("galaxies satisfying luminosity cut = ", np.sum(choice))
 
+        if return_asymm >= 0:
+            choice_asymm = (L_lo_asymm < lum) & (L_hi_asymm >= lum)
+            if "ACT_BN" in cmb_sample or "ACT_D56" in cmb_sample:
+                choice_asymm &= data['S16ILC'] == 1.
+            elif "ACT_DR5_f090" in cmb_sample or "ACT_DR5_f150" in cmb_sample:
+                choice_asymm &= data['S18coadd'] == 1.
+            
+        # read in halo mass and stellar mass and convert into optical depth
+        if return_tau:
+            tau = get_tau_theory(stellarmasses, halomasses)
+        
+        # get bias estimate
+        if return_bias:
+            bias = get_bias(halomasses, Z) # from empirical estimate
+
+    elif 'MGS' == galaxy_sample:
+        hdul = fits.open(gal_fn)
+        RA = hdul[1].data['RA'].flatten() # 0, 360
+        DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 70
+        Z = hdul[1].data['Z'].flatten()
+        ABSM = hdul[1].data['ABSM'][:, 2].flatten() # ugrizJKY (r)
+        M = hdul[1].data['M'].flatten() # ugrizJKY (r)
+        OBJECT_POSITION = hdul[1].data['OBJECT_POSITION'].flatten()
+        hdul = fits.open(kcorr_fn)
+        KCORRECT = hdul[1].data['KCORRECT']
+
+        # get luminosity given magnitude
+        lum = get_lum(Z, M, OBJECT_POSITION, KCORRECT)
+        print("hopefully not many L > 1.e11 = ", np.sum(lum > 1.e11))
+        lum[lum > 1.e11] = 1.e11
+
+        # get halo mass estimate
+        M_of_L_cen = get_M_of_L_cen()
+        halo_mass = M_of_L_cen(lum) # Msun/h
+        halo_mass[halo_mass > 3.e14] = 3.e14
+        halo_mass[halo_mass > 1.e11] = 1.e11
+
+        # get theoretical optical depth estimate
+        h = 0.6774
+        tau = get_tau_theory(3.*lum/h**2, halo_mass/h)
+        
+        # get bias estimate
+        if return_bias:
+            #bias = np.load(bias_fn)['bias'] # auto-correlation
+            #bias = get_bias(halo_mass/h, Z) # colossus
+            bias = get_bias_mgs(lum) # empirical estimate Zehavi 2011
+        
+        # make selection based on luminosity, magnitude, halo mass
+        #choice = ABSM < -21. # original try 160k
+        #choice = ABSM < -21.2 # original try 120k
+        choice = ABSM < -21.4 # original try 86k nice shape sometimes 3 sigma with 3
+        #choice = lum >= np.percentile(lum, 75) # median was upside down
+        #choice = ABSM < -21.6 # 60k 3.1 gives 3 sigma with 100 samples
+        #choice = ABSM < -21.7 # 50k
+        #choice = ABSM < -21.8 # 40k
+        #choice &= (Z > 0.09)
+        #choice = np.ones(len(Z), dtype=bool)
+
+    elif 'MGS_grp' in galaxy_sample:
+        data = ascii.read(gal_fn)
+        RA = data['col2'] # 0, 360
+        DEC = data['col3'] # -90, 90 # -10, 70
+        Z = data['col4']
+        Lgal = data['col5']
+        Psat = data['col7']
+        Mgrp = data['col8']
+        Ltot = data['col10']
+
+        # get theoretical optical depth estimate
+        h = 0.6774
+        tau = get_tau_theory(3.*Ltot/h**2, Mgrp/h)
+        
+        # get bias estimate
+        if return_bias:
+            bias = get_bias(Mgrp, Z) # colossus
+        
+        # make selection based on luminosity, magnitude, halo mass
+        choice = Psat < 0.5
+        #choice &= Mgrp > 2.e13
+        choice &= Mgrp > 8.e12
+        if return_asymm >= 0:
+            choice_asymm = Psat < 0.5
+        
+    elif galaxy_sample == 'BGS':
+        hdul = fits.open(gal_fn)
+        RA = hdul[1].data['RA'].flatten() # 0, 360
+        DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 70
+        Z = hdul[1].data['Z'].flatten()
+        LOGM = hdul[1].data['LOGM'].flatten()
+        #choice = (LOGM > 10.5) & (LOGM < 15.)
+        choice = (LOGM > 10.5) & (LOGM < 11.)
+        #choice = (LOGM > 10.75) & (LOGM < 11.) # currently running 300k
+        #choice = (LOGM > 10.75) & (LOGM < 15.)
+        #choice = (LOGM > 11.) & (LOGM < 15.)
+        #choice = (LOGM > 11.15) & (LOGM < 15.)
+        #choice = (LOGM > 11.3) & (LOGM < 15.)
+        choice &= ~np.isnan(Z)
+        choice &= (Z > 0.08) & (Z < 0.7) # good (possibly don't need the lowZ cut)
+
+        """
+        table = {'RA': RA[choice], 'DEC': DEC[choice], 'Z': Z[choice]}
+        table = Table(table)
+        table.write("BGS_logM11_Z0.08-0.7.fits")
+        """
+    elif 'MGS_BGS' == galaxy_sample:
+        hdul = fits.open(gal_fn1)
+        RA = hdul[1].data['RA'].flatten() # 0, 360
+        DEC = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 70
+        Z = hdul[1].data['Z'].flatten()
+        ABSM = hdul[1].data['ABSM'][:, 2].flatten() # ugrizJKY (r)
+        M = hdul[1].data['M'].flatten() # ugrizJKY (r)
+        OBJECT_POSITION = hdul[1].data['OBJECT_POSITION'].flatten()
+        hdul = fits.open(kcorr_fn)
+        KCORRECT = hdul[1].data['KCORRECT']
+
+        # get luminosity given magnitude
+        lum = get_lum(Z, M, OBJECT_POSITION, KCORRECT)
+        print("hopefully not many L > 1.e11 = ", np.sum(lum > 1.e11))
+        lum[lum > 1.e11] = 1.e11
+
+        # get halo mass estimate
+        M_of_L_cen = get_M_of_L_cen()
+        halo_mass = M_of_L_cen(lum) # Msun/h
+        halo_mass[halo_mass > 3.e14] = 3.e14
+        halo_mass[halo_mass > 1.e11] = 1.e11
+
+        # get theoretical optical depth estimate
+        h = 0.6774
+        tau = get_tau_theory(3.*lum/h**2, halo_mass/h)
+                
+        # make selection based on luminosity, magnitude, halo mass
+        #choice = ABSM < -21. # original try 160k
+        #choice = ABSM < -21.2 # original try 120k
+        choice = ABSM < -21.4 # original try 86k nice shape sometimes 3 sigma with 3
+        #choice = lum >= np.percentile(lum, 75) # median was upside down
+        #choice = ABSM < -21.6 # 60k 3.1 gives 3 sigma with 100 samples
+        #choice = ABSM < -21.7 # 50k
+        #choice = ABSM < -21.8 # 40k
+        #choice &= (Z > 0.09)
+        #choice = np.ones(len(Z), dtype=bool)
+        
+        hdul = fits.open(gal_fn2)
+        RA2 = hdul[1].data['RA'].flatten() # 0, 360
+        DEC2 = hdul[1].data['DEC'].flatten() # -90, 90 # -10, 70
+        Z2 = hdul[1].data['Z'].flatten()
+        LOGM = hdul[1].data['LOGM'].flatten()
+        choice2 = (LOGM > 11.) & (LOGM < 15.)
+        choice2 &= ~np.isnan(Z2)
+        #choice2 &= (Z2 > 0.08) & (Z2 < 0.7)
+        choice2 &= (Z2 > 0.07) & (Z2 < 0.55)
+        RA = np.hstack((RA, RA2))
+        DEC = np.hstack((DEC, DEC2))
+        Z = np.hstack((Z, Z2))
+        choice = np.hstack((choice, choice2))
+
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+
+        c = SkyCoord(ra=RA[choice]*u.degree, dec=DEC[choice]*u.degree)
+        catalog = SkyCoord(ra=RA2[choice2]*u.degree, dec=DEC2[choice2]*u.degree)
+        idx, d2d, d3d = c.match_to_catalog_sky(catalog)
+        idx[d2d > 1.*u.arcsec] = -1
+        print("fraction unmatched", np.sum(idx == -1)/len(idx))
+        quit()
+        del RA2, DEC2, Z2, choice2
+        
     # galaxy indices before applying any cuts
     index = np.arange(len(Z), dtype=int)
     print("Zmin/max/med = ", Z.min(), Z.max(), np.median(Z))
     print("RAmin/RAmax = ", RA.min(), RA.max())
     print("DECmin/DECmax = ", DEC.min(), DEC.max())
 
+    # compute comoving position and angular distance
+    P, D_A = get_P_D_A(Cosmo, RA, DEC, Z)
+    
     # make magnitude and RA/DEC cuts to  match ACT
     DEC_choice = (DEC <= cmb_box['decto']) & (DEC > cmb_box['decfrom'])
     if cmb_sample == 'ACT_D56':
@@ -358,26 +583,75 @@ def load_galaxy_sample(Cosmo, galaxy_sample, cmb_sample, data_dir, cmb_box, want
     else:
         # DR5 has RA from -180 to 180, so cmb_box is not used
         RA_choice = np.ones_like(DEC_choice)
-    choice &= DEC_choice & RA_choice
+    RADEC_choice = DEC_choice & RA_choice
+
+    # second sample to cross-correlate with
+    if return_asymm == 1:
+        choice_asymm &= RADEC_choice
+        RA_asymm = RA[choice_asymm]
+        DEC_asymm = DEC[choice_asymm]
+        Z_asymm = Z[choice_asymm]
+        P_asymm = P[choice_asymm]
+        D_A_asymm = D_A[choice_asymm]
+        index_asymm = index[choice_asymm]
+        if return_bias:
+            bias_asymm = bias[choice_asymm]
+            print("median bias = ", np.median(bias_asymm))
+            print("mean bias = ", np.mean(bias_asymm))
+            quit()
+        else:
+            print("bias not wanted, returning ones")
+            bias_asymm = np.ones_like(RA_asymm)
+    
+    # apply RA, DEC cuts
+    choice &= RADEC_choice
     RA = RA[choice]
     DEC = DEC[choice]
     Z = Z[choice]
+    P = P[choice]
+    D_A = D_A[choice]
     index = index[choice]
+    
+    # if second sample is same as the first sample
+    if return_asymm == 0:
+        RA_asymm, DEC_asymm, Z_asymm, P_asymm, D_A_asymm, index_asymm = RA, DEC, Z, P, D_A, index 
+        if return_bias:
+            bias_asymm = bias[choice]
+            print("median bias = ", np.median(bias_asymm))
+            print("mean bias = ", np.mean(bias_asymm))            
+        else:
+            print("bias not wanted, returning ones")            
+            bias_asymm = np.ones_like(RA_asymm)
 
+    # optical depth estimate
+    if return_tau:
+        tau = tau[choice]
+        print("median tau = ", np.median(tau))
+        print("mean tau = ", np.mean(tau))
+    else:
+        print("tau not wanted, returning ones")
+        tau = np.ones_like(RA)
+    print("number of galaxies = ", np.sum(choice))
+        
+    # just to see the numbers
     if galaxy_sample == "2MPZ":
         if mode == "ZMIX":
             ZSPEC = ZSPEC[choice]
             assert len(ZSPEC) == len(Z)
             print("percentage zspec available = ", np.sum(ZSPEC > 0.)*100./len(ZSPEC))
-    print("number of galaxies = ", np.sum(choice))
-
+        
+    # formula for tau divides by d_A^2
+    if return_tau:
+        #tau /= D_A**2 # because we set D_A = 1 Mpc
+        pass
+    # fields we are outputting
+    result = [RA, DEC, Z, P, D_A, index, tau]
+    if return_asymm >= 0:
+        print("number of galaxies for cross-correlation = ", len(RA_asymm))
+        result += [RA_asymm, DEC_asymm, Z_asymm, P_asymm, D_A_asymm, index_asymm, bias_asymm]
     if return_mask:
-        try:
-            mask
-        except:
-            mask = None
-        return RA, DEC, Z, index, mask
-    return RA, DEC, Z, index
+        result.append(mask)
+    return result
 
 def get_sdss_lum_lims(galaxy_sample):
     if "all" in galaxy_sample:
@@ -399,3 +673,59 @@ def get_sdss_lum_lims(galaxy_sample):
         L_lo = 7.9e10
         L_hi = 1.e20
     return L_lo, L_hi
+
+def get_lum(Z, M, OBJECT_POSITION, KCORRECT):
+
+    # In the following, I will use absolute magnitudes calculated assuming Planck13
+    distmod = Planck13.distmod(Z).value
+    k = KCORRECT[:, 2][OBJECT_POSITION]
+    m_abs = (M - k - distmod - 5 * np.log10(Planck13.H0.value / 100.0) + 0.010)
+
+    # We also apply the evolution correction (http://cosmo.nyu.edu/blanton/vagc/lss.html)
+    q0 = 2.0; q1 = -1.0
+    m_abs = (m_abs + q0 * (1 + q1 * (Z - 0.1)) * (Z - 0.1))
+
+    # Calculate luminosities.
+    lum = 10**(-0.4 * (m_abs - 4.76))
+    return lum
+
+def get_bias_mgs(L, b_star=1.14, L_star=1.20e10):
+    # L∗ = 1.20 × 10^10 h^-2 L⊙ in the r-band; Blanton et al. 2003c
+    # bg/b∗ = 0.85 + 0.15L/L∗ − 0.04(M − M∗)
+    b_g = b_star*(0.85 + 0.15*L/L_star)
+    return b_g
+
+def get_L_cen(M_h, A=0.32, M_t=3.08e11, alpha_M=0.264, L_star=1.2e10):
+    # units of L are h^-2 Lodot; M are Modot/h
+    L_cen = L_star*A*(M_h/M_t)**alpha_M*np.exp(-M_t/M_h+1.)
+    return L_cen
+
+def get_M_of_L_cen(plot=False):
+    """ get halo mass a function of central r-band luminosity """
+    M = np.geomspace(1.e10, 3.e15, 10000) # Modot/h
+    L_cen = get_L_cen(M)
+    M_of_L_cen = interp1d(L_cen, M)
+    
+    if plot:
+        plt.figure(figsize=(9, 7))
+        plt.plot(M, L_cen)
+        plt.yscale('log')
+        plt.xscale('log')
+        plt.xlim([M.min(), M.max()])
+        plt.show()
+    return M_of_L_cen
+
+def get_bias(Mvirs, redshifts):
+    """ get bias as a function of halo mass (units Modot/h) and redshift """
+    #nu = peaks.peakHeight(M, z)
+    #b = bias.haloBiasFromNu(nu, model = 'sheth01')
+    b = bias.haloBias(Mvirs, model='tinker10', z=redshifts, mdef='200m')#mdef='vir')
+    return b
+
+def get_tau_theory(M_star, M_vir, d_A=1.):
+    # M_vir within 2.1 arcmin in units of Modot; d_A in Mpc
+    f_b = 0.157 # Omega_b/Omega_m
+    f_star = M_star/M_vir
+    x_e = (X_H + 1.)/(2.*X_H)
+    tau = sigma_T_over_m_p * solar_mass_over_Mpc_to_cm_squared * x_e * X_H * (1-f_star) * f_b * M_vir / d_A**2
+    return tau

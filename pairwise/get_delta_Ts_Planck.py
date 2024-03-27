@@ -196,11 +196,9 @@ def main(galaxy_sample, resCutoutArcmin, Theta, data_dir, want_MF=False, plot=Fa
         return pix
 
     if want_MF:
-        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{MF_str}_{vary_str}Th{Theta:.2f}_delta_Ts.npz"
     else:
-        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npy"
-        index_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_index.npy"
+        delta_T_fn = f"data/{galaxy_sample}{mask_type}{mask_str}{rand_str}_{cmb_sample}_{vary_str}Th{Theta:.2f}_delta_Ts.npz"
 
     # bilinear interpolation
     posmap = cutoutMap.posmap() # pixel positions (centers)
@@ -231,7 +229,7 @@ def main(galaxy_sample, resCutoutArcmin, Theta, data_dir, want_MF=False, plot=Fa
         """
         
         # mirror-turned because of pixell (preferred: interpolates and changes resolution)
-        """
+        '''        
         #t = time.time()
         interp_vals = hp.get_interp_val(mp, theta=L[i]+lons, phi=B[i]+lats, nest=nest, lonlat=True)
         small_mp[:, :] = interp_vals[:, ::-1]
@@ -241,10 +239,10 @@ def main(galaxy_sample, resCutoutArcmin, Theta, data_dir, want_MF=False, plot=Fa
         small_msk = GP.projmap(map=msk, vec2pix_func=vec2pix_func, rot=rot, coord=coord)
         #print("time mask GP = ", time.time()-t) # 0.0014510154724121094
         cutoutMap[:, :] += small_mp[:, :]
-        """
+        '''        
 
         # reprojecting with pixell
-        
+
         rot = None
         #rot = "gal, equ"
         if rot == "gal, equ":
@@ -273,7 +271,7 @@ def main(galaxy_sample, resCutoutArcmin, Theta, data_dir, want_MF=False, plot=Fa
         #small_mp[:, :] = small_mp[:, ::-1]
         small_mp = small_mp
         cutoutMap += small_mp
-        
+
 
         # get gnomonic projection (with interpolation, but weird edges)
         """
@@ -364,8 +362,7 @@ def main(galaxy_sample, resCutoutArcmin, Theta, data_dir, want_MF=False, plot=Fa
     delta_Ts = T_APs - bar_T_APs
     
     # save apertures and indices                                                                                  
-    np.save(delta_T_fn, delta_Ts)
-    np.save(index_fn, index)
+    np.savez(delta_T_fn, delta_Ts=delta_Ts, index=index)
 
 class ArgParseFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
     pass
@@ -379,7 +376,7 @@ if __name__ == "__main__":
     parser.add_argument('--galaxy_sample', '-gal', help='Which galaxy sample do you want to use?',
                         default=DEFAULTS['galaxy_sample'],
                         choices=["BOSS_South", "BOSS_North", "2MPZ", "SDSS_L43D", "SDSS_L61D", "2MPZ_Biteau",
-                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "eBOSS_SGC", "eBOSS_NGC"])
+                                 "SDSS_L43", "SDSS_L61", "SDSS_L79", "SDSS_all", "MGS", "eBOSS_SGC", "eBOSS_NGC"])
     parser.add_argument('--want_MF', '-MF', help='Want to use matched filter', action='store_true')
     parser.add_argument('--plot', help='Want to plot every stamp', action='store_true')
     parser.add_argument('--want_random', '-rand', help='Random seed to shuffle galaxy positions (-1 does not randomize)', type=int, default=-1)

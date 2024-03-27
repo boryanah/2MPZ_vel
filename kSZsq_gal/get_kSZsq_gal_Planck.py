@@ -60,7 +60,7 @@ def main(galaxy_sample, apod_mw, apod_star, apod_gal, want_joint=False):
     #cmb_mp_fn = data_dir+"/cmb_data/COM_CMB_IQU-smica_2048_R3.00_full.fits"
     #cmb_mp_fn = data_dir+"/cmb_data/COM_CMB_IQU-smica-nosz_2048_R3.00_full.fits"
     #cmb_mp_fn = data_dir+"/cmb_data/dust/COM_CMB_IQU-smica-nosz-nodust_2048_R3.00_full.fits"
-    #cmb_mp_fn = data_dir+"/cmb_data/LGMCA/WPR2_CMB_muK.fits"
+    #cmb_mp_fn = data_dir+"/cmb_data/LGMCA/WPR2_CMB_muK.fits" # original
     #cmb_mp_fn = data_dir+"/cmb_data/dust/WPR2_CMB_nodust_K.fits" # new!
     cmb_mp_fn = data_dir+f"/cmb_data/dust/WPR2_CMB_elldep_nodust_K_{galaxy_sample}.fits" # newest!!!
     cmb_mp = hp.read_map(cmb_mp_fn, verbose=True)

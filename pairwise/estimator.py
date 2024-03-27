@@ -2,7 +2,7 @@
 import numba
 numba.config.THREADING_LAYER = 'safe'
 import numpy as np
-
+import Corrfunc
 
 @numba.njit(parallel=True, fastmath=True)
 def pairwise_momentum(X, dT, bins, is_log_bin, dtype=np.float32, nthread=1):
@@ -313,3 +313,66 @@ def pairwise_velocity_box(X, V_los, Lbox, bins, is_log_bin, dtype=np.float32, nt
             pairwise_velocity[i] = weight_count[i]/norm_weight_count[i]
     
     return pair_count, pairwise_velocity
+
+
+def pairwise_vel_symm(pos, v1d, bins, nthread, periodic=False, box=None, pos2=None, v1d2=None, isa='avx512f'):#'fallback'):#'avx'):
+    """
+    If isa="avx" or "avx512f" (fastest) is not implemented, would "fallback" to the DOUBLE implementation
+    """
+    
+    # determine auto or cross correlation
+    if v1d2 is not None:
+        autocorr = 0
+    else:
+        autocorr = 1
+    
+    # combine position and velocity into weights
+    rv = np.vstack((pos.T, v1d)).T
+    if autocorr:
+        rv2 = rv; pos2 = pos
+    else:
+        rv2 = np.vstack((pos2.T, v1d2)).T
+    
+    # compute numerator and denominator
+    res = Corrfunc.theory.DD(autocorr, nthread, bins, *pos.T, weights1=rv.T, periodic=periodic, boxsize=box, X2=pos2[:, 0], Y2=pos2[:, 1], Z2=pos2[:, 2], weights2=rv2.T, verbose=False, isa=isa, weight_type='pairwise_vel_los')
+    res_norm = Corrfunc.theory.DD(autocorr, nthread, bins, *pos.T, weights1=pos.T, periodic=periodic, boxsize=box, X2=pos2[:, 0], Y2=pos2[:, 1], Z2=pos2[:, 2], weights2=pos2.T, verbose=False, isa=isa, weight_type='pairwise_vel_los_norm')
+    pairwise = -res['weightavg']/res_norm['weightavg']
+    pairwise[res_norm['weightavg'] == 0.] = 0.
+    
+    # return pairwise estimator
+    return pairwise
+
+def pairwise_vel_asymm(pos, deltaT, bins, nthread, periodic=False, box=None, tau=None, pos2=None, bias2=None, isa='avx512f'):#'fallback'):#'avx'):
+    """
+    If isa="avx" or "avx512f" (fastest) is not implemented, would "fallback" to the DOUBLE implementation
+    pairwise_vel_los_asymm requires 4 weights (3 positions, fourth is deltaT times tau prox for first and bias for second)
+    """
+    
+    # must be cross correlation because asymmetric
+    autocorr = 0
+    if pos2 is None:
+        pos2 = pos
+    if tau is None:
+        tau = np.ones(pos.shape[0]) 
+    if bias2 is None:
+        bias2 = np.ones(pos2.shape[0])
+    
+    # combine position and velocity into weights
+    rv_num1 = np.vstack((pos.T, deltaT*tau)).T
+    #rv_den1 = np.vstack((pos.T, tau)).T # not used
+    rv_num2 = np.vstack((pos2.T, bias2)).T
+    #rv_den2 = np.vstack((pos2.T, bias2)).T # not used
+    pos2 = pos2.astype(np.float32)
+    pos = pos.astype(np.float32)
+    rv_num1 = rv_num1.astype(np.float32)
+    rv_num2 = rv_num2.astype(np.float32)
+    
+    # compute numerator and denominator
+    res = Corrfunc.theory.DD(autocorr, nthread, bins, *pos.T, weights1=rv_num1.T, periodic=periodic, boxsize=box, X2=pos2[:, 0], Y2=pos2[:, 1], Z2=pos2[:, 2], weights2=rv_num2.T, verbose=False, isa=isa, weight_type='pairwise_vel_los_asymm')
+    res_norm = Corrfunc.theory.DD(autocorr, nthread, bins, *pos.T, weights1=pos.T, periodic=periodic, boxsize=box, X2=pos2[:, 0], Y2=pos2[:, 1], Z2=pos2[:, 2], weights2=pos2.T, verbose=False, isa=isa, weight_type='pairwise_vel_los_norm')
+    #res_norm = Corrfunc.theory.DD(autocorr, nthread, bins, *pos.T, weights1=rv_den1.T, periodic=periodic, boxsize=box, X2=pos2[:, 0], Y2=pos2[:, 1], Z2=pos2[:, 2], weights2=rv_den2.T, verbose=False, isa=isa, weight_type='pairwise_vel_los_asymm_norm')
+    pairwise = -res['weightavg']/res_norm['weightavg']
+    pairwise[res_norm['weightavg'] == 0.] = 0.
+    
+    # return pairwise estimator
+    return pairwise

@@ -26,7 +26,8 @@ def cutoutGeometry(projCutout='cea', rApMaxArcmin=6., resCutoutArcmin=0.25, test
     '''
 
     # choose postage stamp size to fit the largest ring
-    dArcmin = np.ceil(2. * rApMaxArcmin * np.sqrt(2.))
+    dArcmin = np.ceil(2. * rApMaxArcmin * np.sqrt(2.)) # og
+    #dArcmin = np.ceil(2. * rApMaxArcmin * np.sqrt(3.)) # TESTING
    
     nx = np.floor((dArcmin / resCutoutArcmin - 1.) / 2.) + 1.
     dxDeg = (2. * nx + 1.) * resCutoutArcmin / 60.
@@ -113,7 +114,6 @@ def get_tzav(dTs, zs, sigma_z):
     get_tzav_and_w_nb(dTs, zs, zs, sigma_z, res1, res2)
     return res1/res2
 
-
 def get_tzav_fast(dTs, zs, sigma_z):
     '''Subsample and interpolate Tzav to make it fast.
     dTs: entire list of dT decrements
@@ -134,7 +134,7 @@ def get_tzav_fast(dTs, zs, sigma_z):
     get_tzav_and_w_nb(dTs, zs, z_subsampled, sigma_z, res1, res2)
     tzav_subsampled = res1/res2
     #interpolate
-    f = interpolate.interp1d(z_subsampled, tzav_subsampled, kind='cubic')
+    f = interpolate.interp1d(z_subsampled, tzav_subsampled, kind='cubic', bounds_error=False, fill_value=0.)
     tzav_fast = f(zs)
     return tzav_fast
 
@@ -142,7 +142,8 @@ def calc_T_AP(imap, rad_arcmin, test=False, mask=None):
     modrmap = imap.modrmap()
     radius = rad_arcmin*utils.arcmin
     inner = modrmap < radius
-    outer = (modrmap >= radius) & (modrmap < np.sqrt(2.)*radius)
+    outer = (modrmap >= radius) & (modrmap < np.sqrt(2.)*radius) # og
+    #outer = (modrmap >= np.sqrt(2.)*radius) & (modrmap < np.sqrt(3.)*radius) # TESTING
     if mask is None:
         flux_inner = imap[inner].mean()
         flux_outer = imap[outer].mean()
@@ -236,6 +237,7 @@ def GNFW_filter(modrmap, theta_500=4., c_500=1.156, alpha=1.062, beta=5.4807, ga
     """
     From David's paper. theta_500 = 1.8 # arcmin, 2.e13 Msun/h; theta_500 = 2.1 # arcmin, 2.e14 Msun/h
     """
+    
     # arrray of angular sizes in real space
     thetas = np.linspace(modrmap.min(), modrmap.max(), 1001) # radians
     thetas = 0.5*(thetas[1:] + thetas[:-1])
@@ -259,25 +261,39 @@ def GNFW_filter(modrmap, theta_500=4., c_500=1.156, alpha=1.062, beta=5.4807, ga
     return filt_map
     
 def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False, apod_pix=20):
-    # what do with mask??
+    # for some reason, when masking without taking into account the mean, I get higher SNR with ACT
 
     # make sure not empty
     assert fmap is not None
     assert power is not None
+    
+    if mask is None:
+        mask = enmap.apod(imap*0+1., apod_pix) # pass an array of ones; same shape and wcs as imap
+    else:
+        if np.isclose(np.sum(mask), np.product(mask.shape)):
+            mask = enmap.apod(imap*0+1., apod_pix) # pass an array of ones; same shape and wcs as imap
+        else:
+            # convert pixel size to canvas size
+            h, w = imap.pixshape() # h, w in radians
+            width = apod_pix*((h+w)*0.5)
+            mask = imap.copy()*0+mask
+            mask *= enmap.apod(imap*0+1., apod_pix)
+            #mask = enmap.apod_mask(mask, width=width, edge=True)
 
-    # apodize and take fft
-    taper = enmap.apod(imap*0+1., apod_pix) # pass an array of ones; same shape, wcs as imap
-    #imap_tapered = (imap*taper) # for some reason with ACT this gives me highest SNR (apod = 20) than apod = 0 or below version (better than apod = 0?)
-    # this seems the most physical version to me
-    mean_imap = np.mean(imap)
+    # apodize and take fft (this seems the most physical)
+    mean_imap = np.sum(imap*mask)/np.sum(mask)
     imap = imap/mean_imap - 1.
-    imap_tapered = (imap*taper + 1)*mean_imap
-    kmap = enmap.fft(imap_tapered, normalize="phys", nthread=1) # nthread important when running in parallel
+    imap_masked = (imap*mask + 1)*mean_imap
+    kmap = enmap.fft(imap_masked, normalize="phys", nthread=1) # nthread important when running in parallel
 
     # flattened inverse power spectrum
     inv_C_power = (1./power)
     inv_C_power = np.nan_to_num(inv_C_power)
     inv_C_power[power == 0.] = 0.
+
+    # TESTING!!!!!!!!!!!!!!!!!!!!!!!
+    modlmap = kmap.modlmap()
+    fmap[(modlmap < 100) & (modlmap > 3800)] = 0.
     
     if test:        
         modlmap = kmap.modlmap()
@@ -300,14 +316,12 @@ def calc_T_MF(imap, fmap=None, mask=None, power=None, test=False, apod_pix=20):
         plt.figure(2); plt.title("L distance (Fourier)")
         plt.imshow(np.fft.fftshift(modlmap))
 
-        
         plt.figure(3); plt.title("Filtering (real)")
         #plt.imshow(np.fft.fftshift((map_fltr)))
-        plt.imshow(map_fltr) # GNFW filter
-        
+        plt.imshow(map_fltr) # GNFW filter        
         
         plt.figure(4); plt.title("Original map (real, tapered)")
-        plt.imshow(imap*taper)
+        plt.imshow(imap_masked)
         
         plt.figure(5); plt.title("Filtered map (real, tapered)")
         plt.imshow(map_kSZ)
