@@ -50,9 +50,9 @@ def bin_mat(r=[],mat=[],r_bins=[]):
             #x[nd]=bin_idx==indxs[nd]
             slc[nd]=bin_idx==indxs[nd]
             if nd==0:
-                mat_t=mat_r_dr[slc]
+                mat_t=mat_r_dr[tuple(slc)]
             else:
-                mat_t=mat_t[slc]
+                mat_t=mat_t[tuple(slc)]
             norm_ijk*=np.sum(r_dr[slc[nd]])
         if norm_ijk==0:
             continue
