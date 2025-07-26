@@ -11,8 +11,9 @@ from pixell import powspec
 
 import rotfuncs
 
-
 np.seterr(divide='ignore', invalid='ignore')
+
+MAX_THREADS = numba.config.NUMBA_NUM_THREADS
 
 def eshow(x, fn, **kwargs): 
     ''' Define a function to help us plot the maps neatly '''
@@ -95,6 +96,25 @@ def get_tzav_and_w_nb(dT, z, zj, sigma_z, res1, res2):
         res1 += dT[i] * np.exp(-(zj[0]-z[i])**2.0/(2.0*sigma_z**2))
         res2 += np.exp(-(zj[0]-z[i])**2/(2.0*sigma_z**2))
 
+@numba.njit(parallel=True, fastmath=True)
+def get_tzav_and_w_nb_new(dT, z, zj, sigma_z, nthread=MAX_THREADS):
+    '''
+    Basically the idea is that instead of doing for every pair, you fix one
+    of the two to be a sample j at some linearly spaced z and i goes over all
+    And then you take ratio and you interpolate at the actual locations of gals
+    '''
+    numba.set_num_threads(nthread)
+    res1 = np.zeros((nthread, zj.shape[0]), dtype=np.float32)
+    res2 = np.zeros((nthread, zj.shape[0]), dtype=np.float32)
+    for j in range(len(zj)):
+        for i in numba.prange(dT.shape[0]): # might run into issues cause overwriting
+            tid = numba.get_thread_id()
+            res1[tid, j] += dT[i] * np.exp(-(zj[j]-z[i])**2.0/(2.0*sigma_z**2))
+            res2[tid, j] += np.exp(-(zj[j]-z[i])**2/(2.0*sigma_z**2))
+    res1 = res1.sum(axis=0)
+    res2 = res2.sum(axis=0)
+    return res1, res2
+            
 def get_tzav_and_w_nb_dumb(dT, z, zj, sigma_z, res1, res2):
     '''Launched by get_tzav to compute formula (equiv. but slower) '''
     for j in range(len(zj)):
@@ -131,7 +151,8 @@ def get_tzav_fast(dTs, zs, sigma_z):
     #now compute tzav as we usually do.
     res1 = np.zeros(z_subsampled.shape[0])
     res2 = np.zeros(z_subsampled.shape[0])
-    get_tzav_and_w_nb(dTs, zs, z_subsampled, sigma_z, res1, res2)
+    #get_tzav_and_w_nb(dTs, zs, z_subsampled, sigma_z, res1, res2) # og works well
+    res1, res2 = get_tzav_and_w_nb_new(dTs, zs, z_subsampled, sigma_z) # TESTING!!!!
     tzav_subsampled = res1/res2
     #interpolate
     f = interpolate.interp1d(z_subsampled, tzav_subsampled, kind='cubic', bounds_error=False, fill_value=0.)
